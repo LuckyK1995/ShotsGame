@@ -1,0 +1,876 @@
+import React, { useState, useCallback, useMemo, useEffect } from 'react';
+import { useGameStore } from '../store/gameStore';
+import { EquipmentIcon } from './EquipmentIcon';
+import { Equipment, EquipSlot, EquipRarity } from '../game/types/game';
+import { getEquipmentBonus, getRarityName, RARITY_COLORS, EQUIP_SLOTS, SLOT_LABELS, isEquipmentInActiveSet, getQualitySetGroups, RARITY_LABELS, createEquipment } from '../game/data/equipment';
+
+// 出售价格表（按品质）
+const raritySellMap: Record<EquipRarity, number> = {
+  common: 10,
+  advanced: 25,
+  fine: 50,
+  legendary: 100,
+  epic: 200,
+  mythic: 500,
+};
+
+const neonCyan = '#00F5D4';
+const neonPurple = '#B026FF';
+const neonPink = '#FF0080';
+const neonYellow = '#FFE600';
+
+function hexToRgba(hex: string, alpha: number): string {
+  const r = parseInt(hex.slice(1, 3), 16);
+  const g = parseInt(hex.slice(3, 5), 16);
+  const b = parseInt(hex.slice(5, 7), 16);
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+}
+
+const itemSlotStyle = (rarity: EquipRarity) => {
+  const baseColor = RARITY_COLORS[rarity] || RARITY_COLORS.common;
+  const borderAlpha: Record<EquipRarity, number> = {
+    common: 0.3, advanced: 0.4, fine: 0.5,
+    legendary: 0.55, epic: 0.6, mythic: 0.65,
+  };
+  const glowBlur: Record<EquipRarity, number> = {
+    common: 0, advanced: 6, fine: 8,
+    legendary: 10, epic: 12, mythic: 14,
+  };
+  const glowAlpha: Record<EquipRarity, number> = {
+    common: 0, advanced: 0.2, fine: 0.25,
+    legendary: 0.3, epic: 0.35, mythic: 0.4,
+  };
+  // 传说/史诗/神话使用渐变背景，与边框颜色区分
+  const rarityGradient: Record<string, string> = {
+    legendary: 'radial-gradient(circle at 50% 40%, #7A3A1A 0%, #3D1A08 60%, #1F0E04 100%)',
+    epic: 'radial-gradient(circle at 50% 40%, #4A2A7A 0%, #1E0E3D 60%, #0E0620 100%)',
+    mythic: 'radial-gradient(circle at 50% 40%, #7A1A2A 0%, #3D0A12 60%, #1F0508 100%)',
+  };
+  const blur = glowBlur[rarity] || 0;
+  const glow = blur > 0 ? `0 0 ${blur}px ${hexToRgba(baseColor, glowAlpha[rarity] || 0)}` : 'none';
+  return {
+    background: rarityGradient[rarity] || 'rgba(19, 16, 37, 0.6)',
+    border: `2.5px solid ${hexToRgba(baseColor, borderAlpha[rarity] || 0.3)}`,
+    borderRadius: '8px',
+    boxShadow: glow,
+    cursor: 'pointer',
+  };
+};
+
+const emptySlotStyle = {
+  background: 'rgba(19, 16, 37, 0.3)',
+  border: '2.5px dashed rgba(100, 100, 130, 0.2)',
+  borderRadius: '8px',
+  opacity: 0.8,
+};
+
+const storageEmptyStyle = {
+  background: 'rgba(19, 16, 37, 0.2)',
+  border: '2.5px dashed rgba(100, 100, 130, 0.15)',
+  borderRadius: '8px',
+  opacity: 0.6,
+};
+
+const cardStyle = {
+  background: 'rgba(19, 16, 37, 0.8)',
+  backdropFilter: 'blur(12px)',
+  border: '1px solid rgba(176, 38, 255, 0.25)',
+  borderRadius: '12px',
+  boxShadow: '0 0 20px rgba(176, 38, 255, 0.1), inset 0 1px 0 rgba(255,255,255,0.05)',
+};
+
+type TabType = 'equipment' | 'inventory';
+
+interface GameEngineRef {
+  current: {
+    addGold: (amount: number) => void;
+    syncEquipmentState: (equipment: Equipment[], equipmentStorage: Equipment[]) => void;
+  } | null;
+}
+
+interface EquipmentPanelProps {
+  onTabChange: (tab: TabType) => void;
+  activeTab: TabType;
+  engineRef?: GameEngineRef;
+  onShowStats?: () => void;
+}
+
+const EquipmentPanel: React.FC<EquipmentPanelProps> = ({ onTabChange, engineRef, onShowStats }) => {
+  const { equipment, equipmentStorage, player, setEquipment, setEquipmentStorage } = useGameStore();
+  const [selectedItem, setSelectedItem] = useState<
+    { equipment: Equipment; source: 'equipped' | 'storage' } | null
+  >(null);
+  const [sortDesc, setSortDesc] = useState(true); // true=由高到低，false=由低到高
+  const [showSellPicker, setShowSellPicker] = useState(false);
+  // 缓存勾选的品质（localStorage），避免重复操作
+  const [sellQualities, setSellQualities] = useState<Set<EquipRarity>>(() => {
+    try {
+      const saved = localStorage.getItem('batchSellQualities');
+      if (saved) return new Set(JSON.parse(saved) as EquipRarity[]);
+    } catch {}
+    return new Set<EquipRarity>(['common', 'advanced']);
+  });
+
+  // 持久化勾选品质
+  useEffect(() => {
+    try {
+      localStorage.setItem('batchSellQualities', JSON.stringify(Array.from(sellQualities)));
+    } catch {}
+  }, [sellQualities]);
+
+  // 已装备的成套分组（用于跑马灯）
+  const setGroups = useMemo(() => getQualitySetGroups(equipment), [equipment]);
+
+  // 判断某件装备是否属于成套（用于跑马灯特效）
+  const isSetMember = useCallback((equip: Equipment) => {
+    return isEquipmentInActiveSet(equip, equipment);
+  }, [equipment]);
+
+  // 获取装备对应套装颜色（成套时）
+  const getSetMarqueeColor = useCallback((equip: Equipment): string | null => {
+    if (!isSetMember(equip)) return null;
+    const colorMap: Record<string, string> = {
+      legendary: '#FF8C00',
+      epic: '#FFD700',
+      mythic: '#FF3B3B',
+    };
+    return colorMap[equip.rarity] || null;
+  }, [isSetMember]);
+
+  const getEquipForSlot = (slot: EquipSlot): Equipment | undefined => {
+    return equipment.find((e) => e.slot === slot);
+  };
+
+  const handleEquippedClick = useCallback(
+    (equip: Equipment) => {
+      setSelectedItem({ equipment: equip, source: 'equipped' });
+    },
+    []
+  );
+
+  const handleStorageClick = useCallback(
+    (equip: Equipment) => {
+      setSelectedItem({ equipment: equip, source: 'storage' });
+    },
+    []
+  );
+
+  // 统一同步函数：更新 Zustand + 同步到引擎（重算属性）
+  const syncBoth = useCallback((newEquip: Equipment[], newStorage: Equipment[]) => {
+    setEquipment(newEquip);
+    setEquipmentStorage(newStorage);
+    if (engineRef?.current?.syncEquipmentState) {
+      engineRef.current.syncEquipmentState(newEquip, newStorage);
+    }
+  }, [setEquipment, setEquipmentStorage, engineRef]);
+
+  const handleClose = useCallback(() => {
+    setSelectedItem(null);
+  }, []);
+
+  const handleDrop = useCallback(() => {
+    if (!selectedItem) return;
+    if (selectedItem.source === 'equipped') {
+      syncBoth(equipment.filter((e) => e.id !== selectedItem.equipment.id), equipmentStorage);
+    } else {
+      syncBoth(equipment, equipmentStorage.filter((e) => e.id !== selectedItem.equipment.id));
+    }
+    setSelectedItem(null);
+  }, [selectedItem, equipment, equipmentStorage, syncBoth]);
+
+  const handleEquip = useCallback(() => {
+    if (!selectedItem || selectedItem.source !== 'storage') return;
+    const newEquipment = [...equipment];
+    const existingIndex = newEquipment.findIndex((e) => e.slot === selectedItem.equipment.slot);
+    let newStorage: Equipment[];
+    if (existingIndex >= 0) {
+      newStorage = [...equipmentStorage, newEquipment[existingIndex]];
+      newEquipment[existingIndex] = selectedItem.equipment;
+    } else {
+      newEquipment.push(selectedItem.equipment);
+      newStorage = equipmentStorage;
+    }
+    newStorage = newStorage.filter((e) => e.id !== selectedItem.equipment.id);
+    syncBoth(newEquipment, newStorage);
+    setSelectedItem(null);
+  }, [selectedItem, equipment, equipmentStorage, syncBoth]);
+
+  const handleUnequip = useCallback(() => {
+    if (!selectedItem || selectedItem.source !== 'equipped') return;
+    syncBoth(equipment.filter((e) => e.id !== selectedItem.equipment.id), [...equipmentStorage, selectedItem.equipment]);
+    setSelectedItem(null);
+  }, [selectedItem, equipment, equipmentStorage, syncBoth]);
+
+  const handleScrap = useCallback(() => {
+    if (!selectedItem) return;
+    const gold = raritySellMap[selectedItem.equipment.rarity] || 0;
+    if (gold > 0 && engineRef?.current) {
+      engineRef.current.addGold(gold);
+    }
+    if (selectedItem.source === 'equipped') {
+      syncBoth(equipment.filter((e) => e.id !== selectedItem.equipment.id), equipmentStorage);
+    } else {
+      syncBoth(equipment, equipmentStorage.filter((e) => e.id !== selectedItem.equipment.id));
+    }
+    setSelectedItem(null);
+  }, [selectedItem, equipment, equipmentStorage, syncBoth, engineRef]);
+
+  const handleSortStorage = useCallback(() => {
+    const order = sortDesc
+      ? ['mythic', 'epic', 'legendary', 'fine', 'advanced', 'common']
+      : ['common', 'advanced', 'fine', 'legendary', 'epic', 'mythic'];
+    const sorted = [...equipmentStorage].sort((a, b) => {
+      const ra = order.indexOf(a.rarity);
+      const rb = order.indexOf(b.rarity);
+      if (ra !== rb) return ra - rb;
+      return b.level - a.level;
+    });
+    syncBoth(equipment, sorted);
+    setSortDesc(!sortDesc);
+  }, [equipmentStorage, equipment, syncBoth, sortDesc]);
+
+  const handleBatchSell = useCallback(() => {
+    const selected = Array.from(sellQualities);
+    if (selected.length === 0) return;
+    const toSell = equipmentStorage.filter(e => selected.includes(e.rarity));
+    if (toSell.length === 0) {
+      setShowSellPicker(false);
+      return;
+    }
+    const totalGold = toSell.reduce((sum, e) => sum + (raritySellMap[e.rarity] || 0), 0);
+    if (totalGold > 0 && engineRef?.current) {
+      engineRef.current.addGold(totalGold);
+    }
+    syncBoth(equipment, equipmentStorage.filter(e => !selected.includes(e.rarity)));
+    setShowSellPicker(false);
+  }, [equipmentStorage, equipment, sellQualities, syncBoth, engineRef]);
+
+  const toggleSellQuality = useCallback((q: EquipRarity) => {
+    setSellQualities(prev => {
+      const next = new Set(prev);
+      if (next.has(q)) next.delete(q);
+      else next.add(q);
+      return next;
+    });
+  }, []);
+
+  // 预览：当前勾选品质可出售的件数与总价
+  const sellPreview = useMemo(() => {
+    const selected = Array.from(sellQualities);
+    const toSell = equipmentStorage.filter(e => selected.includes(e.rarity));
+    const totalGold = toSell.reduce((sum, e) => sum + (raritySellMap[e.rarity] || 0), 0);
+    return { count: toSell.length, gold: totalGold };
+  }, [equipmentStorage, sellQualities]);
+
+  const neonText = {
+    fontFamily: '"Rajdhani", "Orbitron", "Courier New", monospace',
+    fontWeight: 600,
+    letterSpacing: '0.5px',
+  };
+
+  return (
+    <div className="h-full flex relative gap-2" style={{ color: '#E0E0FF' }}>
+      {/* 跑马灯动画 keyframes：整圈虚线，每帧转1/3边，12帧转满一圈 */}
+      <style>{`
+        @keyframes setMarquee {
+          0%   { border-color: var(--mc) var(--mc) var(--mc) transparent; border-style: dashed dashed dashed solid; }
+          8%   { border-color: var(--mc) var(--mc) transparent transparent; border-style: dashed dashed solid solid; }
+          17%  { border-color: var(--mc) var(--mc) transparent var(--mc); border-style: dashed dashed solid dashed; }
+          25%  { border-color: var(--mc) transparent transparent var(--mc); border-style: dashed solid solid dashed; }
+          33%  { border-color: transparent transparent var(--mc) var(--mc); border-style: solid solid dashed dashed; }
+          42%  { border-color: transparent var(--mc) var(--mc) var(--mc); border-style: solid dashed dashed dashed; }
+          50%  { border-color: var(--mc) var(--mc) var(--mc) transparent; border-style: dashed dashed dashed solid; }
+          58%  { border-color: var(--mc) var(--mc) transparent transparent; border-style: dashed dashed solid solid; }
+          67%  { border-color: var(--mc) var(--mc) transparent var(--mc); border-style: dashed dashed solid dashed; }
+          75%  { border-color: var(--mc) transparent transparent var(--mc); border-style: dashed solid solid dashed; }
+          83%  { border-color: transparent transparent var(--mc) var(--mc); border-style: solid solid dashed dashed; }
+          92%  { border-color: transparent var(--mc) var(--mc) var(--mc); border-style: solid dashed dashed dashed; }
+          100% { border-color: var(--mc) var(--mc) var(--mc) transparent; border-style: dashed dashed dashed solid; }
+        }
+      `}</style>
+      <div className="w-1/3 flex flex-col gap-1.5">
+        <div
+          style={{ ...neonText, fontSize: '9px', color: neonCyan, letterSpacing: '1px' }}
+        >
+          已装备 ({equipment.length}/9)
+        </div>
+        <div className="grid grid-cols-3 gap-1">
+          {EQUIP_SLOTS.map((slot) => {
+            const equip = getEquipForSlot(slot);
+            const marqueeColor = equip ? getSetMarqueeColor(equip) : null;
+            return (
+              <div
+                key={slot}
+                className="flex flex-col items-center justify-center cursor-pointer relative"
+                style={{ width: '36px', height: '36px', ...(equip ? itemSlotStyle(equip.rarity) : emptySlotStyle) }}
+                onClick={() => equip && handleEquippedClick(equip)}
+              >
+                {/* 跑马灯边框特效（成套时） */}
+                {equip && marqueeColor && (
+                  <div
+                    className="absolute inset-0 pointer-events-none"
+                    style={{
+                      border: '2px solid',
+                      borderRadius: '8px',
+                      ['--mc' as any]: marqueeColor,
+                      animation: 'setMarquee 2s linear infinite',
+                      boxShadow: `0 0 8px ${marqueeColor}66`,
+                    }}
+                  />
+                )}
+                {equip ? (
+                  <>
+                    <EquipmentIcon slot={equip.slot} rarity={equip.rarity} variant={equip.iconVariant} size={28} />
+                    <span
+                      className="absolute bottom-0.5 left-1"
+                      style={{
+                        fontFamily: '"Rajdhani", "Orbitron", monospace',
+                        fontSize: '8px',
+                        color: '#FFFFFF',
+                        textShadow: '0 0 4px rgba(255,255,255,0.5)',
+                      }}
+                    >
+                      {equip.level}
+                    </span>
+                  </>
+                ) : (
+                  <span
+                    className="text-center px-1"
+                    style={{
+                      fontFamily: '"Rajdhani", "Orbitron", monospace',
+                      fontSize: '6px',
+                      color: 'rgba(150,150,180,0.4)',
+                    }}
+                  >
+                    {SLOT_LABELS[slot as keyof typeof SLOT_LABELS]}
+                  </span>
+                )}
+              </div>
+            );
+          })}
+        </div>
+
+        {/* 查看属性按钮：宽度=三个格子+两个间距 */}
+        <button
+          onClick={() => onShowStats?.()}
+          style={{
+            fontFamily: '"Rajdhani", "Orbitron", monospace',
+            fontSize: '8px',
+            fontWeight: 600,
+            color: neonCyan,
+            background: 'rgba(0, 245, 212, 0.1)',
+            border: '1px solid rgba(0, 245, 212, 0.3)',
+            borderRadius: '6px',
+            boxShadow: '0 0 6px rgba(0, 245, 212, 0.1)',
+            padding: '4px 0',
+            cursor: 'pointer',
+            width: '100%',
+            marginTop: '2px',
+          }}
+        >
+          查看属性
+        </button>
+      </div>
+
+      {/* 竖线分隔符 */}
+      <div
+        aria-hidden
+        style={{
+          width: '1px',
+          alignSelf: 'stretch',
+          background: 'linear-gradient(to bottom, rgba(176, 38, 255, 0.05), rgba(176, 38, 255, 0.5) 20%, rgba(0, 245, 212, 0.4) 80%, rgba(0, 245, 212, 0.05))',
+          boxShadow: '0 0 4px rgba(176, 38, 255, 0.3)',
+          margin: '0 -1px',
+        }}
+      />
+
+      <div className="flex-1 flex flex-col gap-1.5">
+        <div
+          style={{ ...neonText, fontSize: '9px', color: neonPurple, letterSpacing: '1px' }}
+        >
+          储物 ({equipmentStorage.length}/200)
+        </div>
+
+        <div
+          className="flex-1 overflow-y-auto p-1.5"
+          style={{
+            background: 'rgba(13, 11, 26, 0.4)',
+            borderRadius: '8px',
+            border: '1px solid rgba(176, 38, 255, 0.1)',
+          }}
+        >
+          <div
+            className="grid"
+            style={{
+              gridTemplateColumns: 'repeat(5, 36px)',
+              rowGap: '1px',
+              justifyContent: 'space-between',
+            }}
+          >
+            {Array.from({ length: Math.max(equipmentStorage.length, 45) }).map((_, index) => {
+              const item = equipmentStorage[index];
+              return (
+                <div
+                  key={index}
+                  className="flex flex-col items-center justify-center cursor-pointer relative"
+                  style={{ width: '36px', height: '36px', marginBottom: '1px', ...(item ? itemSlotStyle(item.rarity) : storageEmptyStyle) }}
+                  onClick={() => item && handleStorageClick(item)}
+                >
+                  {item ? (
+                    <>
+                      <EquipmentIcon slot={item.slot} rarity={item.rarity} variant={item.iconVariant} size={28} />
+                      <span
+                        className="absolute bottom-0.5 left-1"
+                        style={{
+                          fontFamily: '"Rajdhani", "Orbitron", monospace',
+                          fontSize: '8px',
+                          color: '#FFFFFF',
+                          textShadow: '0 0 4px rgba(255,255,255,0.5)',
+                        }}
+                      >
+                        {item.level}
+                      </span>
+                    </>
+                  ) : null}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
+        <div className="flex justify-end gap-2 pt-1" style={{ borderTop: '1px solid rgba(176, 38, 255, 0.15)' }}>
+          <button
+            onClick={handleSortStorage}
+            style={{
+              fontFamily: '"Rajdhani", "Orbitron", monospace',
+              fontSize: '8px',
+              fontWeight: 600,
+              color: neonPurple,
+              background: 'rgba(176, 38, 255, 0.1)',
+              border: '1px solid rgba(176, 38, 255, 0.25)',
+              borderRadius: '6px',
+              boxShadow: '0 0 6px rgba(176, 38, 255, 0.1)',
+              padding: '4px 8px',
+              cursor: 'pointer',
+              minWidth: '52px',
+            }}
+          >
+            整理
+          </button>
+          <button
+            onClick={() => setShowSellPicker(true)}
+            style={{
+              fontFamily: '"Rajdhani", "Orbitron", monospace',
+              fontSize: '8px',
+              fontWeight: 600,
+              color: '#FFD700',
+              background: 'rgba(255, 215, 0, 0.1)',
+              border: '1px solid rgba(255, 215, 0, 0.3)',
+              borderRadius: '6px',
+              boxShadow: '0 0 6px rgba(255, 215, 0, 0.15)',
+              padding: '4px 8px',
+              cursor: 'pointer',
+            }}
+          >
+            批量出售
+          </button>
+        </div>
+      </div>
+
+      {/* 选中物品弹窗 */}
+      {selectedItem && (
+        <div
+          className="absolute inset-0 flex items-center justify-center z-20"
+          style={{ background: 'rgba(0, 0, 0, 0.7)', backdropFilter: 'blur(4px)' }}
+          onClick={handleClose}
+        >
+          <div
+            className="w-72 flex flex-col"
+            style={{
+              ...cardStyle,
+              padding: '12px 14px',
+              height: '200px',
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex justify-between items-start mb-2">
+              <div className="flex items-center gap-2.5">
+                <div
+                  className="w-11 h-11 flex items-center justify-center relative flex-shrink-0"
+                  style={itemSlotStyle(selectedItem.equipment.rarity)}
+                >
+                  <EquipmentIcon slot={selectedItem.equipment.slot} rarity={selectedItem.equipment.rarity} variant={selectedItem.equipment.iconVariant} size={32} />
+                </div>
+                <div className="min-w-0">
+                  <div
+                    style={{
+                      fontFamily: '"Rajdhani", "Orbitron", monospace',
+                      fontSize: '10px',
+                      fontWeight: 700,
+                      color: RARITY_COLORS[selectedItem.equipment.rarity as keyof typeof RARITY_COLORS] || neonCyan,
+                      textShadow: `0 0 6px ${RARITY_COLORS[selectedItem.equipment.rarity as keyof typeof RARITY_COLORS] || neonCyan}60`,
+                      overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                    }}
+                  >
+                    {getRarityName(selectedItem.equipment.rarity)} {selectedItem.equipment.name}
+                  </div>
+                  <div
+                    className="flex items-center gap-1.5"
+                    style={{ fontFamily: '"Rajdhani", "Orbitron", monospace', fontSize: '7px', color: '#8B80A0', marginTop: '1px' }}
+                  >
+                    <span>{SLOT_LABELS[selectedItem.equipment.slot as keyof typeof SLOT_LABELS]}</span>
+                    <span style={{ color: neonYellow, fontWeight: 700 }}>Lv.{selectedItem.equipment.level}</span>
+                  </div>
+                </div>
+              </div>
+              <button
+                style={{
+                  background: 'rgba(255, 45, 85, 0.2)',
+                  border: '1px solid rgba(255, 45, 85, 0.4)',
+                  color: '#FF2D55',
+                  width: '20px',
+                  height: '20px',
+                  fontSize: '11px',
+                  fontWeight: 'bold',
+                  cursor: 'pointer',
+                  fontFamily: '"Rajdhani", "Orbitron", monospace',
+                  borderRadius: '5px',
+                  flexShrink: 0,
+                }}
+                onClick={handleClose}
+              >
+                ×
+              </button>
+            </div>
+
+            {/* 主属性 + 词条：三列紧凑布局 */}
+            <div
+              className="flex-1 overflow-y-auto pt-2"
+              style={{ borderTop: '1px solid rgba(176, 38, 255, 0.15)' }}
+            >
+              <div className="grid grid-cols-3 gap-x-2 gap-y-0.5">
+                {selectedItem.equipment.attack && selectedItem.equipment.attack > 0 && (
+                  <EquipStatRow label="攻击" value={`+${selectedItem.equipment.attack}`} color={neonPink} />
+                )}
+                {selectedItem.equipment.health && selectedItem.equipment.health > 0 && (
+                  <EquipStatRow label="生命" value={`+${selectedItem.equipment.health}`} color="#34C759" />
+                )}
+                {selectedItem.equipment.defense && selectedItem.equipment.defense > 0 && (
+                  <EquipStatRow label="防御" value={`+${selectedItem.equipment.defense}`} color="#5BA3E0" />
+                )}
+                {selectedItem.equipment.attackSpeed && selectedItem.equipment.attackSpeed !== 0 && (
+                  <EquipStatRow label="攻速" value={`${selectedItem.equipment.attackSpeed > 0 ? '+' : ''}${selectedItem.equipment.attackSpeed}%`} color={neonCyan} />
+                )}
+                {selectedItem.equipment.critRate && selectedItem.equipment.critRate > 0 && (
+                  <EquipStatRow label="暴击" value={`+${selectedItem.equipment.critRate}%`} color={neonPurple} />
+                )}
+                {selectedItem.equipment.critDamage && selectedItem.equipment.critDamage > 0 && (
+                  <EquipStatRow label="暴伤" value={`+${selectedItem.equipment.critDamage}%`} color={neonPurple} />
+                )}
+                {selectedItem.equipment.range && selectedItem.equipment.range > 0 && (
+                  <EquipStatRow label="射程" value={`+${selectedItem.equipment.range}`} color="#34C759" />
+                )}
+                {selectedItem.equipment.element && selectedItem.equipment.elementalDamage ? (
+                  <EquipStatRow
+                    label={`${selectedItem.equipment.element === 'fire' ? '火' : selectedItem.equipment.element === 'ice' ? '冰' : selectedItem.equipment.element === 'lightning' ? '雷' : '毒'}属性`}
+                    value={`+${selectedItem.equipment.elementalDamage}`}
+                    color={selectedItem.equipment.element === 'fire' ? '#FF6B35' : selectedItem.equipment.element === 'ice' ? '#5BC0EB' : selectedItem.equipment.element === 'lightning' ? '#FFD700' : '#9B59B6'}
+                  />
+                ) : null}
+              </div>
+
+              {/* 词条 */}
+              {selectedItem.equipment.affixes && selectedItem.equipment.affixes.length > 0 && (
+                <div className="mt-1.5 pt-1 grid grid-cols-3 gap-x-2 gap-y-0.5" style={{ borderTop: '1px solid rgba(176, 38, 255, 0.1)' }}>
+                  {selectedItem.equipment.affixes.map((a, i) => {
+                    const getColor = () => {
+                      switch (a.type) {
+                        case 'attack': return neonPink;
+                        case 'defense': return '#5BA3E0';
+                        case 'resistance': return '#5BA3E0';
+                        case 'health': return '#34C759';
+                        case 'critRate': return neonPurple;
+                        case 'critDamage': return neonPurple;
+                        case 'attackSpeed': return neonCyan;
+                        case 'range': return '#34C759';
+                        case 'pierce': return neonYellow;
+                        case 'elementalAttack':
+                          return a.element === 'fire' ? '#FF6B35' : a.element === 'ice' ? '#5BC0EB' : a.element === 'lightning' ? '#FFD700' : '#9B59B6';
+                        case 'elementalDamage':
+                          return a.element === 'fire' ? '#FF6B35' : a.element === 'ice' ? '#5BC0EB' : a.element === 'lightning' ? '#FFD700' : '#9B59B6';
+                        case 'statusFreeze': return '#5BC0EB';
+                        case 'statusPoison': return '#9B59B6';
+                        case 'statusBurn': return '#FF6B35';
+                        default: return '#E0E0FF';
+                      }
+                    };
+                    const getLabel = () => {
+                      switch (a.type) {
+                        case 'attack': return '攻击';
+                        case 'defense': return '防御';
+                        case 'resistance': return '抗性';
+                        case 'health': return '生命';
+                        case 'critRate': return '暴击';
+                        case 'critDamage': return '暴伤';
+                        case 'attackSpeed': return '攻速';
+                        case 'range': return '射程';
+                        case 'pierce': return '穿透';
+                        case 'elementalAttack': return `${a.element === 'fire' ? '火攻' : a.element === 'ice' ? '冰攻' : a.element === 'lightning' ? '雷攻' : '毒攻'}`;
+                        case 'elementalDamage': return `${a.element === 'fire' ? '火伤' : a.element === 'ice' ? '冰伤' : a.element === 'lightning' ? '雷伤' : '毒伤'}`;
+                        case 'statusFreeze': return '冰冻';
+                        case 'statusPoison': return '中毒';
+                        case 'statusBurn': return '灼烧';
+                        default: return a.type;
+                      }
+                    };
+                    const isPercent = a.type === 'critRate' || a.type === 'critDamage' || a.type === 'attackSpeed' || a.type === 'statusFreeze' || a.type === 'statusPoison' || a.type === 'statusBurn';
+                    return (
+                      <div key={i} className="flex justify-between min-w-0">
+                        <span
+                          className="truncate"
+                          style={{ fontFamily: '"Rajdhani", "Orbitron", monospace', fontSize: '6.5px', color: getColor() }}
+                        >
+                          {getLabel()}
+                        </span>
+                        <span
+                          style={{ fontFamily: '"Rajdhani", "Orbitron", monospace', fontSize: '6.5px', color: '#FFFFFF', flexShrink: 0, marginLeft: '4px' }}
+                        >
+                          +{a.value}{isPercent ? '%' : ''}
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+
+            {/* 耐久度 */}
+            <div className="flex justify-between mt-2" style={{ borderTop: '1px solid rgba(176, 38, 255, 0.15)', paddingTop: '6px' }}>
+              <span style={{ ...neonText, fontSize: '7px', color: '#8B80A0' }}>耐久度</span>
+              <span
+                style={{
+                  ...neonText,
+                  fontSize: '7px',
+                  color: selectedItem.equipment.durability > (selectedItem.equipment.maxDurability || 100) * 0.3 ? neonCyan : '#FF2D55',
+                }}
+              >
+                {selectedItem.equipment.durability}/{selectedItem.equipment.maxDurability || 100}
+              </span>
+            </div>
+
+            {/* 操作按钮 */}
+            <div className="mt-2 pt-2" style={{ borderTop: '1px solid rgba(176, 38, 255, 0.1)' }}>
+              <div className="flex justify-between gap-1.5">
+                <button
+                  className="flex-1 px-2 py-1.5"
+                  style={{
+                    background: 'rgba(255, 215, 0, 0.15)',
+                    border: '1px solid rgba(255, 215, 0, 0.3)',
+                    borderRadius: '6px',
+                    fontFamily: '"Rajdhani", "Orbitron", monospace',
+                    fontSize: '8px',
+                    fontWeight: 600,
+                    color: '#FFD700',
+                    boxShadow: '0 0 8px rgba(255, 215, 0, 0.1)',
+                    cursor: 'pointer',
+                  }}
+                  onClick={handleScrap}
+                >
+                  出售 ({raritySellMap[selectedItem.equipment.rarity]}金)
+                </button>
+                {selectedItem.source === 'storage' && (
+                  <button
+                    className="px-3 py-1.5"
+                    style={{
+                      background: 'rgba(0, 245, 212, 0.15)',
+                      border: '1px solid rgba(0, 245, 212, 0.3)',
+                      borderRadius: '6px',
+                      fontFamily: '"Rajdhani", "Orbitron", monospace',
+                      fontSize: '9px',
+                      fontWeight: 700,
+                      color: neonCyan,
+                      boxShadow: '0 0 8px rgba(0, 245, 212, 0.1)',
+                      cursor: 'pointer',
+                    }}
+                    onClick={handleEquip}
+                  >
+                    装备
+                  </button>
+                )}
+                {selectedItem.source === 'equipped' && (
+                  <button
+                    className="px-3 py-1.5"
+                    style={{
+                      background: 'rgba(255, 0, 128, 0.15)',
+                      border: '1px solid rgba(255, 0, 128, 0.3)',
+                      borderRadius: '6px',
+                      fontFamily: '"Rajdhani", "Orbitron", monospace',
+                      fontSize: '9px',
+                      fontWeight: 700,
+                      color: neonPink,
+                      boxShadow: '0 0 8px rgba(255, 0, 128, 0.1)',
+                      cursor: 'pointer',
+                    }}
+                    onClick={handleUnequip}
+                  >
+                    卸下
+                  </button>
+                )}
+                <button
+                  className="px-3 py-1.5"
+                  style={{
+                    background: 'rgba(255, 45, 85, 0.15)',
+                    border: '1px solid rgba(255, 45, 85, 0.3)',
+                    borderRadius: '6px',
+                    fontFamily: '"Rajdhani", "Orbitron", monospace',
+                    fontSize: '9px',
+                    fontWeight: 700,
+                    color: '#FF2D55',
+                    boxShadow: '0 0 8px rgba(255, 45, 85, 0.1)',
+                    cursor: 'pointer',
+                  }}
+                  onClick={handleDrop}
+                >
+                  丢弃
+                </button>
+              </div>
+              {selectedItem.source === 'storage' && player && player.level < selectedItem.equipment.level && (
+                <div className="text-right mt-2">
+                  <span style={{ ...neonText, fontSize: '8px', color: '#FF2D55' }}>
+                    需要 Lv.{selectedItem.equipment.level}
+                  </span>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 批量出售品质选择弹窗 */}
+      {showSellPicker && (
+        <div
+          className="absolute inset-0 flex items-center justify-center z-30"
+          style={{ background: 'rgba(0, 0, 0, 0.75)', backdropFilter: 'blur(4px)' }}
+          onClick={() => setShowSellPicker(false)}
+        >
+          <div
+            className="p-4"
+            style={{
+              ...cardStyle,
+              width: '260px',
+              padding: '12px 14px',
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex justify-between items-center mb-3">
+              <span style={{ ...neonText, fontSize: '10px', color: neonYellow, fontWeight: 700 }}>
+                批量出售 - 选择品质
+              </span>
+              <button
+                onClick={() => setShowSellPicker(false)}
+                style={{
+                  background: 'rgba(255, 45, 85, 0.2)',
+                  border: '1px solid rgba(255, 45, 85, 0.4)',
+                  color: '#FF2D55',
+                  width: '20px',
+                  height: '20px',
+                  fontSize: '11px',
+                  fontWeight: 'bold',
+                  cursor: 'pointer',
+                  borderRadius: '5px',
+                }}
+              >
+                X
+              </button>
+            </div>
+            <div className="grid grid-cols-3 gap-1.5 mb-3">
+              {(['mythic', 'epic', 'legendary', 'fine', 'advanced', 'common'] as EquipRarity[]).map(q => {
+                const checked = sellQualities.has(q);
+                const count = equipmentStorage.filter(e => e.rarity === q).length;
+                const gold = count * (raritySellMap[q] || 0);
+                return (
+                  <label
+                    key={q}
+                    className="flex flex-col items-center cursor-pointer"
+                    style={{
+                      padding: '5px 4px',
+                      background: checked ? 'rgba(255, 215, 0, 0.1)' : 'rgba(19, 16, 37, 0.5)',
+                      border: `1px solid ${checked ? 'rgba(255, 215, 0, 0.4)' : 'rgba(176, 38, 255, 0.15)'}`,
+                      borderRadius: '6px',
+                    }}
+                    onClick={() => toggleSellQuality(q)}
+                  >
+                    <div className="flex items-center gap-1.5 mb-1">
+                      <div
+                        style={{
+                          width: '12px',
+                          height: '12px',
+                          borderRadius: '3px',
+                          border: `1.5px solid ${RARITY_COLORS[q]}`,
+                          background: checked ? RARITY_COLORS[q] : 'transparent',
+                          boxShadow: checked ? `0 0 4px ${RARITY_COLORS[q]}` : 'none',
+                        }}
+                      />
+                      <span style={{ ...neonText, fontSize: '9px', color: RARITY_COLORS[q], fontWeight: 700 }}>
+                        {RARITY_LABELS[q]}
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <span style={{ ...neonText, fontSize: '7px', color: '#8B80A0' }}>
+                        {count}件
+                      </span>
+                      <span style={{ ...neonText, fontSize: '7px', color: neonYellow }}>
+                        {gold}金
+                      </span>
+                    </div>
+                  </label>
+                );
+              })}
+            </div>
+            <div
+              className="flex justify-between mb-3 pt-2"
+              style={{ borderTop: '1px solid rgba(176, 38, 255, 0.15)' }}
+            >
+              <span style={{ ...neonText, fontSize: '8px', color: '#8B80A0' }}>
+                共 {sellPreview.count} 件
+              </span>
+              <span style={{ ...neonText, fontSize: '9px', color: neonYellow, fontWeight: 700 }}>
+                {sellPreview.gold} 金币
+              </span>
+            </div>
+            <button
+              onClick={handleBatchSell}
+              disabled={sellPreview.count === 0}
+              style={{
+                width: '100%',
+                fontFamily: '"Rajdhani", "Orbitron", monospace',
+                fontSize: '9px',
+                fontWeight: 700,
+                color: '#0A0814',
+                background: sellPreview.count > 0 ? neonYellow : 'rgba(100, 100, 130, 0.3)',
+                border: 'none',
+                borderRadius: '6px',
+                padding: '6px 0',
+                cursor: sellPreview.count > 0 ? 'pointer' : 'not-allowed',
+                boxShadow: sellPreview.count > 0 ? `0 0 8px ${neonYellow}66` : 'none',
+              }}
+            >
+              确认出售
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
+export { EquipmentPanel };
+
+function EquipStatRow({ label, value, color }: { label: string; value: string; color: string }) {
+  return (
+    <div className="flex justify-between min-w-0">
+      <span className="truncate" style={{ fontFamily: '"Rajdhani", "Orbitron", monospace', fontSize: '7px', color }}>{label}</span>
+      <span style={{ fontFamily: '"Rajdhani", "Orbitron", monospace', fontSize: '7px', color: '#FFFFFF', flexShrink: 0, marginLeft: '4px' }}>{value}</span>
+    </div>
+  );
+}

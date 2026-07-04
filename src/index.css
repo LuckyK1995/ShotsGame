@@ -1,0 +1,126 @@
+@import url('https://fonts.googleapis.com/css2?family=Press+Start+2P&family=VT323&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  font-family: 'VT323', 'Press Start 2P', monospace;
+  line-height: 1.5;
+  font-weight: 400;
+  font-synthesis: none;
+  text-rendering: optimizeSpeed;
+  image-rendering: pixelated;
+  image-rendering: crisp-edges;
+}
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+  image-rendering: pixelated;
+}
+
+html, body, #root {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+}
+
+body {
+  background-color: #8B7355;
+  color: #3d2914;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: #5c4033;
+  border: 2px solid #3d2914;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #cd853f;
+  border: 2px solid #3d2914;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #daa520;
+}
+
+.pixel-border {
+  border: 3px solid;
+  border-color: #3d2914 #8b4513 #8b4513 #3d2914;
+  box-shadow: 
+    inset -2px -2px 0 #3d2914,
+    inset 2px 2px 0 #f5deb3;
+}
+
+.pixel-border-inner {
+  border: 2px solid;
+  border-color: #8b4513 #3d2914 #3d2914 #8b4513;
+}
+
+.pixel-shadow {
+  box-shadow: 
+    4px 4px 0 #3d2914,
+    -1px -1px 0 #f5deb3 inset;
+}
+
+.pixel-shadow-sm {
+  box-shadow: 
+    2px 2px 0 #3d2914,
+    -1px -1px 0 #f5deb3 inset;
+}
+
+@keyframes pixel-pulse {
+  0%, 100% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.05);
+  }
+}
+
+.pixel-pulse {
+  animation: pixel-pulse 2s ease-in-out infinite;
+}
+
+@keyframes float-up {
+  0% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+  100% {
+    opacity: 0;
+    transform: translateY(-30px);
+  }
+}
+
+.float-up {
+  animation: float-up 1s ease-out forwards;
+}
+
+@keyframes shake {
+  0%, 100% { transform: translateX(0); }
+  25% { transform: translateX(-4px); }
+  75% { transform: translateX(4px); }
+}
+
+.shake {
+  animation: shake 0.3s ease-in-out;
+}
+
+@keyframes blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
+}
+
+.blink {
+  animation: blink 1s step-end infinite;
+}
