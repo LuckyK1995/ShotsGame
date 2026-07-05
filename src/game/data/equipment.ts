@@ -136,6 +136,7 @@ export const SLOT_LABELS: Record<EquipSlot, string> = {
   necklace: '项链',
 };
 
+// BALANCE v12: Enhanced equipment icons - 10 variants per slot with thematic designs
 const SLOT_ICONS: Record<EquipSlot, string[]> = {
   weapon: ['🔫', '⚔️', '🏹', '🗡️', '💣', '🎯', '🔪', '🪓', '⚙️', '🔧'],
   armor: ['🛡️', '🦺', '👕', '🦾', '🔰', '🏋️', '🧥', '🪖', '💠', '⚙️'],
@@ -216,10 +217,11 @@ export const SET_BONUSES: Record<SetBonusId, SetBonus> = {
     description: '传说中毁灭一切的武器套装',
     pieces: 6,
     icon: '☠️',
+    // BALANCE v12: Optimized wasteland_destroyer - stronger effects
     effects: [
-      { pieces: 2, effect: '攻击力+15%', value: 15, stat: 'attack' },
-      { pieces: 4, effect: '暴击伤害+40%', value: 40, stat: 'critDamage' },
-      { pieces: 6, effect: '攻击附带灼烧伤害', value: 20, stat: 'burnDamage' },
+      { pieces: 2, effect: '攻击力+20%', value: 20, stat: 'attack' },
+      { pieces: 4, effect: '暴击伤害+50%', value: 50, stat: 'critDamage' },
+      { pieces: 6, effect: '攻击附带灼烧伤害，攻速+15%', value: 25, stat: 'burnDamage' },
     ],
   },
 };
@@ -740,13 +742,14 @@ export const ITEMS: Record<string, ItemDef> = {
     cooldown: 30000,
   },
 
+  // BALANCE v12: Optimized new items
   stun_bomb: {
     id: 'stun_bomb',
     name: '眩晕弹',
     type: 'consumable',
     rarity: 'fine',
     effect: 'stun',
-    duration: 2000,
+    duration: 3000,
     icon: '💫',
     description: '使所有敌人眩晕2秒',
     cooldown: 6000,
@@ -757,7 +760,7 @@ export const ITEMS: Record<string, ItemDef> = {
     type: 'consumable',
     rarity: 'legendary',
     effect: 'lightning',
-    value: 100,
+    value: 150,
     duration: 3000,
     icon: '⚡',
     description: '对所有敌人造成100伤害并感电3秒',
@@ -769,7 +772,7 @@ export const ITEMS: Record<string, ItemDef> = {
     type: 'consumable',
     rarity: 'epic',
     effect: 'curse',
-    value: 20,
+    value: 25,
     duration: 8000,
     icon: '📜',
     description: '敌人受到伤害+20%，持续8秒',

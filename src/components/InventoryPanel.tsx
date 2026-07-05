@@ -66,11 +66,13 @@ const itemSlotStyle = (rarity?: string) => {
     common: 0, advanced: 0.2, fine: 0.25,
     legendary: 0.3, epic: 0.35, mythic: 0.4,
   };
-  // 传说/史诗/神话使用渐变背景，与边框颜色区分
   const rarityGradient: Record<string, string> = {
-    legendary: 'radial-gradient(circle at 50% 40%, #7A3A1A 0%, #3D1A08 60%, #1F0E04 100%)',
-    epic: 'radial-gradient(circle at 50% 40%, #4A2A7A 0%, #1E0E3D 60%, #0E0620 100%)',
-    mythic: 'radial-gradient(circle at 50% 40%, #7A1A2A 0%, #3D0A12 60%, #1F0508 100%)',
+    common: 'radial-gradient(circle at 50% 45%, #2A2540 0%, #1E1A35 55%, #15122A 100%)',
+    advanced: 'radial-gradient(circle at 50% 45%, #253050 0%, #1A2540 55%, #101830 100%)',
+    fine: 'radial-gradient(circle at 50% 45%, #3A2855 0%, #2A1C45 55%, #1E1035 100%)',
+    legendary: 'radial-gradient(circle at 50% 40%, #8A4A2A 0%, #5A2A10 60%, #3A1A08 100%)',
+    epic: 'radial-gradient(circle at 50% 40%, #7A6A20 0%, #4D4010 60%, #2F2808 100%)',
+    mythic: 'radial-gradient(circle at 50% 40%, #8A2A3A 0%, #5A1A20 60%, #3A0A10 100%)',
   };
   const blur = glowBlur[r] || 0;
   const glow = blur > 0 ? `0 0 ${blur}px ${hexToRgba(baseColor, glowAlpha[r] || 0)}` : 'none';

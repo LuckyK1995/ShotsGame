@@ -131,14 +131,15 @@ export class GameEngine {
   // 需求 #8：玩家debuff系统（精英/BOSS对玩家施加）
   private playerDebuffs: { type: 'burn' | 'poison' | 'attackSpeedDown' | 'bulletSpeedDown' | 'rangeDown' | 'stun'; remaining: number; duration: number; value: number; tickTimer: number }[] = [];
 
-  private debuffEffects: Record<string, { color: string; particleColor: string; damage: number; speedMultiplier: number; icon: string; name: string; description: string; damageMultiplier?: number; glowColor?: string; tickInterval?: number }> = {
-    burn: { color: '#FF9600', particleColor: '#FF5540', damage: 5, speedMultiplier: 1, icon: '🔥', name: '灼烧', description: '持续受到火焰伤害', glowColor: '#FF8800', tickInterval: 500 },
-    poison: { color: '#00FF00', particleColor: '#00CC00', damage: 4, speedMultiplier: 0.8, icon: '☠️', name: '中毒', description: '持续受到毒素伤害，移动速度降低', glowColor: '#00FF44', tickInterval: 700 },
-    freeze: { color: '#00CCFF', particleColor: '#0088FF', damage: 0, speedMultiplier: 0.1, icon: '❄️', name: '冰冻', description: '被冻结，几乎无法移动', glowColor: '#88EEFF' },
-    lightning: { color: '#FFFF00', particleColor: '#FFFF88', damage: 6, speedMultiplier: 0.7, icon: '⚡', name: '感电', description: '持续受到雷电伤害，移动速度降低', glowColor: '#FFFFAA', tickInterval: 550 },
-    slow: { color: '#8888FF', particleColor: '#AAAAFF', damage: 0, speedMultiplier: 0.5, icon: '🐢', name: '减速', description: '移动速度大幅降低', glowColor: '#BBBBFF' },
-    curse: { color: '#AA00AA', particleColor: '#CC00CC', damage: 2, speedMultiplier: 0.95, icon: '📜', name: '诅咒', description: '受到伤害增加2.25%', damageMultiplier: 1.35, glowColor: '#DD44DD', tickInterval: 900 },
-    stun: { color: '#FFD700', particleColor: '#FFEA00', damage: 0, speedMultiplier: 0, icon: '💫', name: '眩晕', description: '无法移动和攻击', glowColor: '#FFFF88' },
+  // BALANCE v12: Enhanced debuff effects - better visuals and damage
+  private debuffEffects: Record<string, { color: string; particleColor: string; damage: number; speedMultiplier: number; icon: string; name: string; description: string; damageMultiplier?: number; glowColor?: string; tickInterval?: number; particleCount?: number; particleSize?: number; fadeSpeed?: number; visualEffect?: string }> = {
+    burn: { color: '#FF9900', particleColor: '#FF5500', damage: 6, speedMultiplier: 1, icon: '🔥', name: '灼烧', description: '持续受到火焰伤害', glowColor: '#FF8800', tickInterval: 450, particleCount: 4, particleSize: 5, fadeSpeed: 0.025, visualEffect: 'fire' },
+    poison: { color: '#00FF00', particleColor: '#00CC00', damage: 5, speedMultiplier: 0.75, icon: '☠️', name: '中毒', description: '持续受到毒素伤害，移动速度降低', glowColor: '#00FF44', tickInterval: 600, particleCount: 3, particleSize: 4, fadeSpeed: 0.02, visualEffect: 'gas' },
+    freeze: { color: '#00CCFF', particleColor: '#0088FF', damage: 0, speedMultiplier: 0.05, icon: '❄️', name: '冰冻', description: '被冻结，几乎无法移动', glowColor: '#88EEFF', tickInterval: 1000, particleCount: 5, particleSize: 6, fadeSpeed: 0.008, visualEffect: 'ice' },
+    lightning: { color: '#FFFF00', particleColor: '#FFFF88', damage: 7, speedMultiplier: 0.65, icon: '⚡', name: '感电', description: '持续受到雷电伤害，移动速度降低', glowColor: '#FFFFAA', tickInterval: 500, particleCount: 3, particleSize: 5, fadeSpeed: 0.03, visualEffect: 'spark' },
+    slow: { color: '#8888FF', particleColor: '#AAAAFF', damage: 0, speedMultiplier: 0.4, icon: '🐢', name: '减速', description: '移动速度大幅降低', glowColor: '#BBBBFF', tickInterval: 1000, particleCount: 2, particleSize: 4, fadeSpeed: 0.01, visualEffect: 'fog' },
+    curse: { color: '#AA00AA', particleColor: '#CC00CC', damage: 3, speedMultiplier: 0.9, icon: '📜', name: '诅咒', description: '受到伤害增加30%', damageMultiplier: 1.3, glowColor: '#DD44DD', tickInterval: 800, particleCount: 2, particleSize: 5, fadeSpeed: 0.015, visualEffect: 'dark' },
+    stun: { color: '#FFD700', particleColor: '#FFEA00', damage: 0, speedMultiplier: 0, icon: '💫', name: '眩晕', description: '无法移动和攻击', glowColor: '#FFFF88', tickInterval: 1000, particleCount: 4, particleSize: 6, fadeSpeed: 0.02, visualEffect: 'stars' },
   };
   private talents: Talent[] = [];
   private activeSkills: ActiveSkill[] = [];
@@ -211,20 +212,20 @@ export class GameEngine {
       canvasWidth: canvas.width,
       canvasHeight: canvas.height,
       playerStartX: 14,
-      playerStartY: canvas.height * 0.65 - 25 + ((canvas.height - (canvas.height * 0.65 - 20)) * 0.5) - 16,
+      playerStartY: canvas.height * 0.65 - 25 + ((canvas.height - (canvas.height * 0.65 - 25)) * 0.5) - 16,
       groundY: canvas.height * 0.65 - 20,
       baseEnemyCount: 11,
       maxEnemyCount: 30,
       eliteWaveInterval: 5,
       bossWaveInterval: 8,
-      spawnZoneWidth: 10,
+      spawnZoneWidth: 11,
     };
 
     // 调试配置：基础属性 + 战斗力权重（必须在 createPlayer 之前）
     this.debugConfig = {
       baseStats: {
         attack: 8,
-        attackSpeed: 1000,
+        attackSpeed: 800,
         manualAttackSpeed: 1000,
         maxHealth: 100,
         // 需求 #4：人物最大射程为战场95%宽度（约为395），初始给基础值，calculatePlayerStats会clamp
@@ -306,7 +307,8 @@ export class GameEngine {
       maxHealth: bs.maxHealth,
       level: bs.level,
       exp: 0,
-      expToNextLevel: Math.floor((25 + Math.pow(bs.level, 1.45) * 5.5 + bs.level * 3.5) * 5),
+      // BALANCE v12: Optimized level growth - slower early, faster late
+expToNextLevel: Math.floor(10 + Math.pow(bs.level, 1.7) * 4 + bs.level * 4),
       attack: bs.attack,
       attackSpeed: bs.attackSpeed,
       manualAttackSpeed: bs.manualAttackSpeed,
@@ -383,7 +385,7 @@ export class GameEngine {
         buildings: [
           { x: 80, w: 90, h: 50 }, { x: 200, w: 70, h: 40 },
           { x: 350, w: 100, h: 60 }, { x: 520, w: 80, h: 45 },
-          { x: 680, w: 95, h: 55 }, { x: 850, w: 75, h: 50 },
+          { x: 680, w: 95, h: 55 }, { x: 850, w: 90, h: 50 },
           { x: 1000, w: 85, h: 48 },
         ],
       },
@@ -391,7 +393,7 @@ export class GameEngine {
         offset: 0,
         speed: 30,
         buildings: [
-          { x: 100, w: 120, h: 35 }, { x: 300, w: 100, h: 30 },
+          { x: 100, w: 150, h: 35 }, { x: 300, w: 100, h: 30 },
           { x: 500, w: 160, h: 40 }, { x: 720, w: 110, h: 32 },
           { x: 920, w: 105, h: 45 },
         ],
@@ -735,11 +737,10 @@ export class GameEngine {
 
     const config = ENEMY_CONFIGS[type];
     
-    // 平衡调整：提升血量成长（1.025→1.028）和经验成长（1.023→1.026）
-    const healthMultiplier = Math.pow(1.028, wave - 1);
-    const damageMultiplier = Math.pow(1.014, wave - 1);
-    const speedMultiplier = 1 + Math.min(0.2, (wave - 1) * 0.002);
-    const expMultiplier = Math.pow(1.026, wave - 1);
+    const healthMultiplier = 1 + (wave - 1) * 0.10 + Math.pow(1.009, wave - 1) * 0.4;
+    const damageMultiplier = 1 + (wave - 1) * 0.05 + Math.pow(1.006, wave - 1) * 0.25;
+    const speedMultiplier = 1 + Math.min(0.35, (wave - 1) * 0.0035);
+    const expMultiplier = 1 + (wave - 1) * 0.07 + Math.pow(1.008, wave - 1) * 0.35;
 
     enemy.id = getNextId();
     enemy.type = config.type;
@@ -748,9 +749,11 @@ export class GameEngine {
     enemy.height = config.height;
     enemy.maxHealth = Math.floor(config.baseHealth * healthMultiplier);
     enemy.health = enemy.maxHealth;
-    // 怪物速度：普通怪+100%，精英/BOSS+220%
+    // 怪物速度：普通怪+100%，精英/BOSS+200%
     const speedBonus = config.type === 'normal' ? 2.0 : 3.2;
-    enemy.baseSpeed = config.baseSpeed * speedMultiplier * speedBonus;
+    // 高达移速 = 普通怪物移速的110%（在普通怪速度基础上×1.1）
+    const gundamBonus = type === 'gundam' ? 1.1 : 1.0;
+    enemy.baseSpeed = config.baseSpeed * speedMultiplier * speedBonus * gundamBonus;
     enemy.speed = enemy.baseSpeed;
     enemy.damage = Math.floor(config.baseDamage * damageMultiplier);
     enemy.exp = Math.floor(config.baseExp * expMultiplier);
@@ -855,6 +858,13 @@ export class GameEngine {
     let physicalPenetration = 0;
     let bulletPierceCount = 0;
     let resistance = 0;
+    let fireShotChance = 0;
+    let fireShotDamageMult = 1;
+    let poisonShotChance = 0;
+    let poisonShotDamageMult = 1;
+    let iceShotChance = 0;
+    let iceShotDamageMult = 1;
+    let iceShotFreeze = false;
     const elementalDamageBonus: Record<string, number> = { fire: 0, ice: 0, lightning: 0, poison: 0 };
 
     // 需求 #1：必须装备中带【火/冰/雷/毒属性攻击】词条，对应的【属性伤害增加】词条才生效
@@ -979,73 +989,102 @@ export class GameEngine {
       const lvl = skill.level;
       
       switch (skill.id) {
-        case 'atk_1': attack += 3 * lvl; break;
-        case 'atk_2': attack += 5 * lvl; break;
-        case 'atk_3': attack += 10 * lvl; break;
-        case 'atk_4': attack += 22 * lvl; break;
-        case 'atk_5': attack += 35 * lvl; break;
+        case 'atk_1': attack += 5 * lvl; break;
+        case 'atk_2': attack += 10 * lvl; break;
+        case 'atk_3': attack += 18 * lvl; break;
+        case 'atk_4': attack += 32 * lvl; break;
+        case 'atk_5': attack += 52 * lvl; break;
         
-        case 'spd_1': attackSpeed = Math.floor(attackSpeed * (1 - 0.02 * lvl)); break;
-        case 'spd_2': attackSpeed = Math.floor(attackSpeed * (1 - 0.028 * lvl)); break;
-        case 'spd_3': attackSpeed = Math.floor(attackSpeed * (1 - 0.032 * lvl)); break;
-        case 'spd_5': attackSpeed = Math.floor(attackSpeed * (1 - 0.06 * lvl)); break;
+        case 'spd_1': attackSpeed = Math.floor(attackSpeed * (1 - 0.03 * lvl)); break;
+        case 'spd_2': attackSpeed = Math.floor(attackSpeed * (1 - 0.042 * lvl)); break;
+        case 'spd_3': attackSpeed = Math.floor(attackSpeed * (1 - 0.05 * lvl)); break;
+        case 'spd_5': attackSpeed = Math.floor(attackSpeed * (1 - 0.085 * lvl)); break;
         
-        case 'rng_4': range += 80 * lvl; break;
+        case 'rng_4': range += 90 * lvl; break;
         
-        case 'crit_1': critRate += 1 * lvl; break;
-        case 'crit_2': critRate += 2.5 * lvl; break;
-        case 'crit_3': critRate += 4 * lvl; break;
-        case 'crit_4': critRate += 6 * lvl; break;
+        case 'crit_1': critRate += 1.5 * lvl; break;
+        case 'crit_2': critRate += 3.2 * lvl; break;
+        case 'crit_3': critRate += 5.8 * lvl; break;
+        case 'crit_4': critRate += 9 * lvl; break;
         
-        case 'cdmg_1': critDamage += 10 * lvl; break;
-        case 'cdmg_2': critDamage += 22 * lvl; break;
-        case 'cdmg_3': critDamage += 38 * lvl; break;
+        case 'cdmg_1': critDamage += 14 * lvl; break;
+        case 'cdmg_2': critDamage += 32 * lvl; break;
+        case 'cdmg_3': critDamage += 62 * lvl; break;
         
-        case 'hp_1': maxHealth += 20 * lvl; break;
-        case 'hp_2': maxHealth += 45 * lvl; break;
-        case 'hp_3': maxHealth += 75 * lvl; break;
-        case 'hp_4': maxHealth += 130 * lvl; break;
+        case 'hp_1': maxHealth += 35 * lvl; break;
+        case 'hp_2': maxHealth += 75 * lvl; break;
+        case 'hp_3': maxHealth += 130 * lvl; break;
+        case 'hp_4': maxHealth += 220 * lvl; break;
         
-        case 'def_1': defense += 2 * lvl; break;
-        case 'def_2': defense += 4 * lvl; break;
-        case 'def_3': defense += 7.5 * lvl; break;
-        case 'def_4': defense += 12 * lvl; break;
+        case 'def_1': defense += 3.5 * lvl; break;
+        case 'def_2': defense += 7 * lvl; break;
+        case 'def_3': defense += 13 * lvl; break;
+        case 'def_4': defense += 21 * lvl; break;
         
-        case 'regen_1': regenPerSec += 0.008 * lvl; break;
-        case 'regen_2': regenPerSec += 0.015 * lvl; break;
-        case 'regen_3': regenPerSec += 0.025 * lvl; break;
+        case 'regen_1': regenPerSec += 0.012 * lvl; break;
+        case 'regen_2': regenPerSec += 0.022 * lvl; break;
+        case 'regen_3': regenPerSec += 0.036 * lvl; break;
         
-        case 'magnet_1': magnetRangeBonus += 100 * lvl; break;
+        case 'magnet_1': magnetRangeBonus += 120 * lvl; break;
         
-        case 'gold_1': goldBonus += 0.22 * lvl; break;
-        case 'gold_2': goldBonus += 0.55 * lvl; break;
+        case 'gold_1': goldBonus += 0.25 * lvl; break;
+        case 'gold_2': goldBonus += 0.60 * lvl; break;
         
-        case 'exp_1': expBonus += 0.12 * lvl; break;
-        case 'exp_2': expBonus += 0.30 * lvl; break;
+        case 'exp_1': expBonus += 0.15 * lvl; break;
+        case 'exp_2': expBonus += 0.35 * lvl; break;
         
-        case 'drop_1': dropBonus += 0.10 * lvl; break;
-        case 'drop_2': dropBonus += 0.25 * lvl; break;
+        case 'drop_1': dropBonus += 0.12 * lvl; break;
+        case 'drop_2': dropBonus += 0.30 * lvl; break;
         
         case 'lightning_1':
-          lightningChance += 2 * lvl;
+          lightningChance += 2.5 * lvl;
           lightningChain = Math.max(lightningChain, 2);
-          lightningDamage += 12 * lvl;
+          lightningDamage += 15 * lvl;
           break;
         case 'lightning_2':
-          lightningChance += 3.5 * lvl;
+          lightningChance += 4 * lvl;
           lightningChain = Math.max(lightningChain, 3);
-          lightningDamage += 22 * lvl;
+          lightningDamage += 28 * lvl;
           break;
         
         case 'lifesteal_1':
-          lifestealPercent += 0.3 * lvl;
+          lifestealPercent += 0.4 * lvl;
           break;
         case 'lifesteal_2':
-          lifestealPercent += 0.8 * lvl;
+          lifestealPercent += 1 * lvl;
           break;
         
         case 'piercing_2':
-          bulletPierceCount = Math.max(bulletPierceCount, 4);
+          bulletPierceCount = Math.max(bulletPierceCount, 5);
+          break;
+        
+        case 'fire_shot_1':
+          fireShotChance += 2 * lvl;
+          fireShotDamageMult = 1;
+          break;
+        case 'fire_shot_2':
+          fireShotChance += 3.5 * lvl;
+          fireShotDamageMult = 1.5;
+          break;
+        
+        case 'poison_shot_1':
+          poisonShotChance += 3 * lvl;
+          poisonShotDamageMult = 1;
+          break;
+        case 'poison_shot_2':
+          poisonShotChance += 4.5 * lvl;
+          poisonShotDamageMult = 1.5;
+          break;
+        
+        case 'ice_shot_1':
+          iceShotChance += 2 * lvl;
+          iceShotDamageMult = 1;
+          iceShotFreeze = false;
+          break;
+        case 'ice_shot_2':
+          iceShotChance += 3.5 * lvl;
+          iceShotDamageMult = 1.5;
+          iceShotFreeze = true;
           break;
         
         case 'ultimate':
@@ -1081,9 +1120,9 @@ export class GameEngine {
     if (this.wavePotionEffects['defense']) defense += this.wavePotionEffects['defense'];
     if (this.wavePotionEffects['range']) range += this.wavePotionEffects['range'];
 
-    const levelBonus = Math.max(0, (this.player.level - 1)) * 0.012;
+    const levelBonus = Math.max(0, (this.player.level - 1)) * 0.015;
     attack = Math.floor(attack * (1 + levelBonus));
-    maxHealth = Math.floor(maxHealth * (1 + levelBonus * 1.0));
+    maxHealth = Math.floor(maxHealth * (1 + levelBonus * 1.2));
 
     this.player.attack = attack;
     this.player.attackSpeed = attackSpeed;
@@ -1115,6 +1154,13 @@ export class GameEngine {
     (this.player as any).lightningDamage = lightningDamage;
     (this.player as any).lifestealPercent = lifestealPercent;
     (this.player as any).physicalPenetration = physicalPenetration;
+    (this.player as any).fireShotChance = fireShotChance;
+    (this.player as any).fireShotDamageMult = fireShotDamageMult;
+    (this.player as any).poisonShotChance = poisonShotChance;
+    (this.player as any).poisonShotDamageMult = poisonShotDamageMult;
+    (this.player as any).iceShotChance = iceShotChance;
+    (this.player as any).iceShotDamageMult = iceShotDamageMult;
+    (this.player as any).iceShotFreeze = iceShotFreeze;
     (this.player as any).bulletPierceCount = bulletPierceCount;
     (this.player as any).resistance = resistance;
     (this.player as any).elementalDamageBonus = elementalDamageBonus;
@@ -2162,6 +2208,22 @@ export class GameEngine {
 
   private spawnEnemy(): void {
     const wave = this.gameState.currentWave;
+    const spawnIndex = this.gameState.waveEnemiesSpawned + 1; // 当前刷出的第几只（从1开始）
+
+    // 第11波起，每波第24只刷高达，第29只刷异形
+    if (wave >= 11) {
+      if (spawnIndex === 24) {
+        this.enemyPool.acquire('gundam', wave);
+        this.gameState.waveEnemiesSpawned++;
+        return;
+      }
+      if (spawnIndex === 29) {
+        this.enemyPool.acquire('alien', wave);
+        this.gameState.waveEnemiesSpawned++;
+        return;
+      }
+    }
+
     // 基础怪物随波次解锁（前6种，2+wave/3）
     const baseTypes = NORMAL_ENEMY_TYPES.slice(0, Math.min(2 + Math.floor(wave / 3), 6));
     let pool = [...baseTypes];
@@ -2390,7 +2452,7 @@ export class GameEngine {
     const baseSpeed = 500 * this.getPlayerDebuffMultiplier('bulletSpeedDown');
     const bulletAnyCtx = this;
 
-    const fireSpecialBullet = (type: 'freeze' | 'bomb' | 'poison' | 'shock', angle: number) => {
+    const fireSpecialBullet = (type: 'freeze' | 'bomb' | 'poison' | 'shock' | 'fire_shot' | 'poison_shot' | 'ice_shot', angle: number, extraData?: any) => {
       if (bulletAnyCtx.bulletPool.getActive().length >= 120) return;
       const bullet = bulletAnyCtx.bulletPool.acquire(bulletX, bulletY, damage) as Bullet;
       const bulletAny = bullet as any;
@@ -2416,6 +2478,19 @@ export class GameEngine {
         bulletAny.isWaveBullet = true;
         bulletAny.wavePhase = 0;
         bullet.width = 50;
+      } else if (type === 'fire_shot') {
+        bulletAny.isFireShot = true;
+        bulletAny.fireShotDamageMult = extraData?.damageMult || 1;
+        bullet.speed = baseSpeed;
+      } else if (type === 'poison_shot') {
+        bulletAny.isPoisonShot = true;
+        bulletAny.poisonShotDamageMult = extraData?.damageMult || 1;
+        bullet.speed = baseSpeed;
+      } else if (type === 'ice_shot') {
+        bulletAny.isIceShot = true;
+        bulletAny.iceShotDamageMult = extraData?.damageMult || 1;
+        bulletAny.iceShotFreeze = extraData?.freeze || false;
+        bullet.speed = baseSpeed;
       }
     };
 
@@ -2446,6 +2521,25 @@ export class GameEngine {
           fireSpecialBullet('shock', angle);
           bulletAnyCtx.shockCooldown = shockCdMs;
         }
+      }
+
+      const fireShotChance = (bulletAnyCtx.player as any).fireShotChance || 0;
+      const fireShotDamageMult = (bulletAnyCtx.player as any).fireShotDamageMult || 1;
+      if (fireShotChance > 0 && Math.random() * 100 < fireShotChance) {
+        fireSpecialBullet('fire_shot', angle, { damageMult: fireShotDamageMult });
+      }
+
+      const poisonShotChance = (bulletAnyCtx.player as any).poisonShotChance || 0;
+      const poisonShotDamageMult = (bulletAnyCtx.player as any).poisonShotDamageMult || 1;
+      if (poisonShotChance > 0 && Math.random() * 100 < poisonShotChance) {
+        fireSpecialBullet('poison_shot', angle, { damageMult: poisonShotDamageMult });
+      }
+
+      const iceShotChance = (bulletAnyCtx.player as any).iceShotChance || 0;
+      const iceShotDamageMult = (bulletAnyCtx.player as any).iceShotDamageMult || 1;
+      const iceShotFreeze = (bulletAnyCtx.player as any).iceShotFreeze || false;
+      if (iceShotChance > 0 && Math.random() * 100 < iceShotChance) {
+        fireSpecialBullet('ice_shot', angle, { damageMult: iceShotDamageMult, freeze: iceShotFreeze });
       }
     };
 
@@ -2584,6 +2678,12 @@ export class GameEngine {
       }
 
       let speedMultiplier = 1;
+      // 受击硬直：改为减速60%（从完全定身改为大幅减速，防止连续命中导致怪物永久卡住）
+      const hitStun = (enemy as any).hitStunTimer || 0;
+      if (hitStun > 0) {
+        (enemy as any).hitStunTimer = Math.max(0, hitStun - dtMs);
+        speedMultiplier *= 0.4;
+      }
       let dotDamage = 0;
       const activeDebuffs: string[] = [];
 
@@ -2685,11 +2785,11 @@ export class GameEngine {
         }
       }
 
-      if (Math.random() < 0.2) {
+      if (Math.random() < 0.25) {
         for (const debuffType of activeDebuffs) {
           const effect = this.debuffEffects[debuffType];
           if (effect && effect.particleColor) {
-            const particleCount = isFrozen && debuffType === 'freeze' ? 2 : 1;
+            const particleCount = effect.particleCount || (isFrozen && debuffType === 'freeze' ? 2 : 1);
             for (let p = 0; p < particleCount; p++) {
               this.particlePool.acquire(
                 enemy.x + enemy.width / 2 + randomRange(-8, 8),
@@ -2794,8 +2894,8 @@ export class GameEngine {
     const startY = enemy.y + enemy.height / 2;
     const targetX = this.player.x + this.player.width / 2;
     const targetY = this.player.y + this.player.height / 2;
-    // 使用子弹对象记录抛物线参数
-    const bullet = this.bulletPool.acquire(startX, startY, 0, enemy.damage);
+    // 使用子弹对象记录抛物线参数（resetBullet 第4个参数为 damage）
+    const bullet = this.bulletPool.acquire(startX, startY, enemy.damage);
     if (!bullet) return;
     const bulletAny = bullet as any;
     bulletAny.isEnemyProjectile = true;
@@ -2961,7 +3061,7 @@ export class GameEngine {
       this.player.exp -= this.player.expToNextLevel;
       this.player.level++;
       const lvl = this.player.level;
-      this.player.expToNextLevel = Math.floor((25 + Math.pow(lvl, 1.45) * 5.5 + lvl * 3.5) * 5);
+      this.player.expToNextLevel = Math.floor(10 + Math.pow(lvl, 1.7) * 4 + lvl * 4);
       this.player.skillPoints++;
       this.calculatePlayerStats();
       this.player.health = this.player.maxHealth;
@@ -3535,7 +3635,7 @@ export class GameEngine {
     
     enemy.health -= finalDamage;
     enemy.hitFlash = isCrit ? 0.15 : 0.08;
-    enemy.stunTimer = isCrit ? 100 : 50;
+    (enemy as any).hitStunTimer = isCrit ? 120 : 60;
 
     const dn = this.damageNumberPool.acquire(
       enemy.x + enemy.width / 2, 
@@ -3607,6 +3707,25 @@ export class GameEngine {
         const chance = 1 + 1 * (bulletFx.freezeLvl - 1);
         if (Math.random() * 100 < chance) {
           (enemy as any).frozenUntil = performance.now() + 3000;
+        }
+      }
+      if (bulletFx.isFireShot) {
+        const fireDamage = Math.floor(this.player.level * this.player.attack * (bulletFx.fireShotDamageMult || 1));
+        enemy.health -= fireDamage;
+        this.applySingleEnemyDebuff(enemy, 'burn', 5 + this.player.level, 3000);
+      }
+      if (bulletFx.isPoisonShot) {
+        const poisonDamage = Math.floor(this.player.level * this.player.attack * (bulletFx.poisonShotDamageMult || 1));
+        enemy.health -= poisonDamage;
+        this.applySingleEnemyDebuff(enemy, 'poison', 4 + this.player.level * 0.8, 3000);
+      }
+      if (bulletFx.isIceShot) {
+        const iceDamage = Math.floor(this.player.level * this.player.attack * (bulletFx.iceShotDamageMult || 1));
+        enemy.health -= iceDamage;
+        if (bulletFx.iceShotFreeze) {
+          (enemy as any).frozenUntil = performance.now() + 2000;
+        } else {
+          this.applySingleEnemyDebuff(enemy, 'slow', 50, 2000);
         }
       }
       if (bulletFx.isPoisonBullet && bulletFx.poisonLvl > 0 && bulletFx.poisonAoe) {
@@ -4299,7 +4418,7 @@ export class GameEngine {
     this.player.level = 99;
     while (this.player.level < 100) {
       this.player.level++;
-      this.player.expToNextLevel = Math.floor((25 + Math.pow(this.player.level, 1.45) * 5.5 + this.player.level * 3.5) * 5);
+      this.player.expToNextLevel = Math.floor(10 + Math.pow(this.player.level, 1.7) * 4 + this.player.level * 4);
     }
     this.player.exp = 0;
     this.calculatePlayerStats();
@@ -4361,7 +4480,7 @@ export class GameEngine {
       if (saveData.player) {
         this.player.level = saveData.player.level || 1;
         this.player.exp = saveData.player.exp || 0;
-        this.player.expToNextLevel = saveData.player.expToNextLevel || Math.floor((25 + Math.pow(1, 1.45) * 5.5 + 1 * 3.5) * 5);
+        this.player.expToNextLevel = saveData.player.expToNextLevel || Math.floor(10 + Math.pow(1, 1.7) * 4 + 1 * 4);
         this.player.gold = saveData.player.gold || 0;
         this.player.score = saveData.player.score || 0;
         this.player.skillPoints = saveData.player.skillPoints || 0;
@@ -4416,7 +4535,7 @@ export class GameEngine {
     this.debugConfig.baseStats = { ...this.debugConfig.baseStats, ...stats };
     if (stats.level !== undefined) {
       this.player.level = stats.level;
-      this.player.expToNextLevel = Math.floor((25 + Math.pow(stats.level, 1.45) * 5.5 + stats.level * 3.5) * 5);
+      this.player.expToNextLevel = Math.floor(10 + Math.pow(stats.level, 1.7) * 4 + stats.level * 4);
     }
     if (stats.maxHealth !== undefined) {
       this.player.health = stats.maxHealth;
@@ -4463,7 +4582,7 @@ export class GameEngine {
     }
     // 同步等级对应的经验上限
     if (stats.level !== undefined) {
-      p.expToNextLevel = Math.floor((25 + Math.pow(stats.level, 1.45) * 5.5 + stats.level * 3.5) * 5);
+      p.expToNextLevel = Math.floor(10 + Math.pow(stats.level, 1.7) * 4 + stats.level * 4);
     }
     // 同步生命上限
     if (stats.maxHealth !== undefined && p.health > stats.maxHealth) {
@@ -6191,6 +6310,9 @@ export class GameEngine {
       const hasBomb = bulletAny.isBombBullet && bulletAny.hasBomb && bulletAny.bombLvl > 0;
       const hasPoison = bulletAny.isPoisonBullet && bulletAny.poisonLvl > 0;
       const hasWave = bulletAny.isWaveBullet && bulletAny.waveLvl > 0;
+      const hasFireShot = bulletAny.isFireShot;
+      const hasPoisonShot = bulletAny.isPoisonShot;
+      const hasIceShot = bulletAny.isIceShot;
 
       ctx.save();
       ctx.translate(bullet.x, bullet.y);
@@ -6198,6 +6320,12 @@ export class GameEngine {
 
       if (hasWave) {
         this.renderWaveBullet(ctx, bw, bulletAny.wavePhase || 0, bulletAny.waveLvl || 1, bulletAny.cloneBullet ? bulletAny.cloneIdx : -1);
+      } else if (hasFireShot) {
+        this.renderFireShotBullet(ctx, bw);
+      } else if (hasPoisonShot) {
+        this.renderPoisonShotBullet(ctx, bw);
+      } else if (hasIceShot) {
+        this.renderIceShotBullet(ctx, bw);
       } else if (hasFreeze) {
         this.renderFreezeBullet(ctx, bw);
       } else if (hasBomb) {
@@ -6504,6 +6632,144 @@ export class GameEngine {
     }
   }
 
+  private renderFireShotBullet(ctx: CanvasRenderingContext2D, bw: number): void {
+    ctx.fillStyle = '#FF6600';
+    ctx.shadowColor = '#FF6600';
+    ctx.shadowBlur = 12;
+
+    ctx.beginPath();
+    ctx.moveTo(2, -3);
+    ctx.lineTo(3, -2);
+    ctx.lineTo(3, 2);
+    ctx.lineTo(2, 3);
+    ctx.lineTo(-2, 2);
+    ctx.lineTo(-3, -1);
+    ctx.lineTo(-2, -3);
+    ctx.closePath();
+    ctx.fill();
+
+    ctx.fillStyle = '#FFCC00';
+    ctx.beginPath();
+    ctx.moveTo(1, -2);
+    ctx.lineTo(2, -1);
+    ctx.lineTo(2, 1);
+    ctx.lineTo(1, 2);
+    ctx.lineTo(-1, 1);
+    ctx.lineTo(-2, -1);
+    ctx.closePath();
+    ctx.fill();
+
+    for (let i = 0; i < 4; i++) {
+      const angle = (Math.PI * 2 / 4) * i + this.animFrame * 0.1;
+      const l = 4 + Math.sin(this.animFrame * 0.3 + i) * 2;
+      const px = Math.cos(angle) * l;
+      const py = Math.sin(angle) * l;
+      ctx.fillStyle = `rgba(255, 100, 0, ${0.5 + Math.sin(this.animFrame * 0.4 + i) * 0.3})`;
+      ctx.beginPath();
+      ctx.arc(px, py, 1.5 + Math.sin(this.animFrame * 0.5 + i) * 0.5, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    ctx.shadowBlur = 0;
+
+    const trailLen = 20;
+    for (let i = 1; i <= 3; i++) {
+      const alpha = 0.6 - i * 0.15;
+      const len = trailLen * i;
+      ctx.fillStyle = `rgba(255, 100, 0, ${alpha})`;
+      ctx.fillRect(-len - bw / 2, -1.5 - i * 0.5, len, 3 + i);
+    }
+  }
+
+  private renderPoisonShotBullet(ctx: CanvasRenderingContext2D, bw: number): void {
+    ctx.fillStyle = '#44CC44';
+    ctx.shadowColor = '#44CC44';
+    ctx.shadowBlur = 8;
+
+    ctx.beginPath();
+    ctx.arc(0, 0, 4, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.fillStyle = '#88EE88';
+    ctx.beginPath();
+    ctx.arc(0, 0, 2, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.fillStyle = '#FFFFFF';
+    ctx.beginPath();
+    ctx.arc(-1, -1, 0.8, 0, Math.PI * 2);
+    ctx.fill();
+
+    for (let i = 0; i < 5; i++) {
+      const angle = (Math.PI * 2 / 5) * i + this.animFrame * 0.08;
+      const l = 5 + Math.sin(this.animFrame * 0.25 + i) * 2;
+      const px = Math.cos(angle) * l;
+      const py = Math.sin(angle) * l;
+      ctx.fillStyle = `rgba(68, 204, 68, ${0.4 + Math.sin(this.animFrame * 0.35 + i) * 0.25})`;
+      ctx.beginPath();
+      ctx.arc(px, py, 1.2, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    ctx.shadowBlur = 0;
+
+    const trailLen = 16;
+    for (let i = 1; i <= 3; i++) {
+      const alpha = 0.5 - i * 0.12;
+      const len = trailLen * i;
+      ctx.fillStyle = `rgba(68, 204, 68, ${alpha})`;
+      ctx.fillRect(-len - bw / 2, -1 - i * 0.4, len, 2 + i * 0.5);
+    }
+  }
+
+  private renderIceShotBullet(ctx: CanvasRenderingContext2D, bw: number): void {
+    ctx.fillStyle = '#44AAFF';
+    ctx.shadowColor = '#44AAFF';
+    ctx.shadowBlur = 10;
+
+    ctx.beginPath();
+    ctx.moveTo(0, -4);
+    ctx.lineTo(3, -2);
+    ctx.lineTo(3, 2);
+    ctx.lineTo(0, 4);
+    ctx.lineTo(-3, 2);
+    ctx.lineTo(-3, -2);
+    ctx.closePath();
+    ctx.fill();
+
+    ctx.fillStyle = '#88EEFF';
+    ctx.beginPath();
+    ctx.moveTo(0, -2.5);
+    ctx.lineTo(2, -1);
+    ctx.lineTo(2, 1);
+    ctx.lineTo(0, 2.5);
+    ctx.lineTo(-2, 1);
+    ctx.lineTo(-2, -1);
+    ctx.closePath();
+    ctx.fill();
+
+    for (let i = 0; i < 6; i++) {
+      const angle = (Math.PI * 2 / 6) * i;
+      const l = 5;
+      const px = Math.cos(angle) * l;
+      const py = Math.sin(angle) * l;
+      ctx.fillStyle = `rgba(68, 170, 255, ${0.3 + Math.sin(this.animFrame * 0.2 + i) * 0.2})`;
+      ctx.beginPath();
+      ctx.arc(px, py, 1, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    ctx.shadowBlur = 0;
+
+    const trailLen = 18;
+    for (let i = 1; i <= 3; i++) {
+      const alpha = 0.55 - i * 0.14;
+      const len = trailLen * i;
+      ctx.fillStyle = `rgba(68, 170, 255, ${alpha})`;
+      ctx.fillRect(-len - bw / 2, -1 - i * 0.5, len, 2 + i);
+    }
+  }
+
   // 波浪电击弹渲染：50px 正弦波，带流动动画和电光效果
   // cloneIdx: -1=玩家(青色)，0=第一个分身(黄色)，1=第二个分身(银白色)
   private renderWaveBullet(ctx: CanvasRenderingContext2D, bw: number, phase: number, lvl: number, cloneIdx: number = -1): void {
@@ -6607,18 +6873,30 @@ export class GameEngine {
         this.renderInfected(ctx, x, y, width, height, px, isFlash, enemy.color, enemy.animFrame);
       } else if (enemy.name === '暴徒') {
         this.renderBrute(ctx, x, y, width, height, px, isFlash, enemy.color, enemy.animFrame);
+      } else if (enemy.name === '巨型蜘蛛') {
+        this.renderSpider(ctx, x, y, width, height, px, isFlash, enemy.color, enemy.animFrame);
+      } else if (enemy.name === '丧尸') {
+        this.renderZombie(ctx, x, y, width, height, px, isFlash, enemy.color, enemy.animFrame);
       } else if (enemy.name === '重装兵') {
         this.renderHeavyTrooper(ctx, x, y, width, height, px, isFlash, enemy.color, enemy.animFrame);
       } else if (enemy.name === '机甲兵') {
         this.renderMechSoldier(ctx, x, y, width, height, px, isFlash, enemy.color, enemy.animFrame);
+      } else if (enemy.name === '狙击机器人') {
+        this.renderSniperBot(ctx, x, y, width, height, px, isFlash, enemy.color, enemy.animFrame);
       } else if (enemy.name === '战争坦克') {
         this.renderWarTank(ctx, x, y, width, height, px, isFlash, enemy.color, enemy.animFrame);
       } else if (enemy.name === '异星母巢') {
         this.renderAlienHive(ctx, x, y, width, height, px, isFlash, enemy.color, enemy.animFrame);
+      } else if (enemy.name === '机械巨龙') {
+        this.renderCyberDragon(ctx, x, y, width, height, px, isFlash, enemy.color, enemy.animFrame);
       } else if (enemy.name === '远程射手') {
         this.renderRangedShooter(ctx, x, y, width, height, px, isFlash, enemy.color, enemy.animFrame);
       } else if (enemy.name === '刺客') {
         this.renderAssassin(ctx, x, y, width, height, px, isFlash, enemy.color, enemy.animFrame);
+      } else if (enemy.name === '高达') {
+        this.renderGundam(ctx, x, y, width, height, px, isFlash, enemy.color, enemy.animFrame);
+      } else if (enemy.name === '异形') {
+        this.renderAlien(ctx, x, y, width, height, px, isFlash, enemy.color, enemy.animFrame);
       } else if ((enemy as any).isSandbag) {
         this.renderSandbag(ctx, x, y, width, height, isFlash);
       } else {
@@ -7494,6 +7772,330 @@ export class GameEngine {
 
     ctx.restore();
   }
+  // 巨型蜘蛛渲染
+  private renderSpider(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, px: number, flash: boolean, color: string, animFrame: number): void {
+    const walkCycle = Math.floor(animFrame / 5) % 4;
+    const legOffset = (walkCycle % 2 === 0 ? 1 : -1) * px;
+    const pulse = Math.sin(animFrame * 0.15) * 0.3;
+
+    ctx.save();
+    ctx.translate(x + w / 2, y + h / 2);
+
+    if (flash) {
+      ctx.fillStyle = '#FFFFFF';
+      ctx.fillRect(-w / 2, -h / 2, w, h);
+    }
+
+    // 8条腿（4对）
+    ctx.strokeStyle = '#2A2A2A';
+    ctx.lineWidth = 1 * px;
+    ctx.beginPath();
+    for (let i = 0; i < 4; i++) {
+      const legY = -3 * px + i * 2 * px;
+      const legLen = 4 * px + pulse;
+      ctx.moveTo(-1 * px, legY);
+      ctx.lineTo(-legLen, legY + legOffset);
+      ctx.moveTo(1 * px, legY);
+      ctx.lineTo(legLen, legY - legOffset);
+    }
+    ctx.stroke();
+
+    // 身体（椭圆）
+    ctx.fillStyle = '#3D3D3D';
+    ctx.beginPath();
+    ctx.ellipse(0, 0, 3.5 * px + pulse, 2.5 * px + pulse, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    // 头部
+    ctx.fillStyle = '#2A2A2A';
+    ctx.beginPath();
+    ctx.arc(0, -2 * px, 2 * px, 0, Math.PI * 2);
+    ctx.fill();
+
+    // 8只红色眼睛
+    ctx.fillStyle = '#FF2200';
+    for (let i = 0; i < 4; i++) {
+      const ex = -1.5 * px + i * px;
+      ctx.beginPath();
+      ctx.arc(ex, -2.5 * px, 0.4 * px, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    // 毒牙
+    ctx.fillStyle = '#8B0000';
+    ctx.beginPath();
+    ctx.moveTo(-0.5 * px, -1 * px);
+    ctx.lineTo(-1 * px, 0.5 * px);
+    ctx.lineTo(0, 0);
+    ctx.closePath();
+    ctx.fill();
+    ctx.beginPath();
+    ctx.moveTo(0.5 * px, -1 * px);
+    ctx.lineTo(1 * px, 0.5 * px);
+    ctx.lineTo(0, 0);
+    ctx.closePath();
+    ctx.fill();
+
+    ctx.restore();
+  }
+
+  // 丧尸渲染
+  private renderZombie(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, px: number, flash: boolean, color: string, animFrame: number): void {
+    const walkCycle = Math.floor(animFrame / 10) % 4;
+    const bodySway = Math.sin(animFrame * 0.08) * 0.8 * px;
+    const armSwing = Math.sin(animFrame * 0.1) * 2 * px;
+
+    ctx.save();
+    ctx.translate(x + w / 2, y + h / 2);
+
+    if (flash) {
+      ctx.fillStyle = '#FFFFFF';
+      ctx.fillRect(-w / 2, -h / 2, w, h);
+    }
+
+    // 双腿（拖沓）
+    ctx.fillStyle = '#3A4A3A';
+    ctx.fillRect(-2 * px, 3 * px, 1.5 * px, 5 * px);
+    ctx.fillRect(0.5 * px, 3 * px, 1.5 * px, 5 * px + (walkCycle % 2 === 0 ? 1 : 0));
+
+    // 身体（倾斜）
+    ctx.save();
+    ctx.rotate(bodySway * 0.05);
+    ctx.fillStyle = '#5A6B5A';
+    ctx.fillRect(-3 * px, -4 * px, 6 * px, 8 * px);
+
+    // 破损衣服纹理
+    ctx.fillStyle = '#3D4D3D';
+    ctx.fillRect(-3 * px, 0, 6 * px, 1 * px);
+    ctx.fillRect(-2 * px, 2 * px, 2 * px, 1 * px);
+
+    // 双臂（前伸，僵尸特征）
+    ctx.fillStyle = '#6A7B6A';
+    ctx.fillRect(-4 * px, -3 * px, 1.5 * px, 5 * px + armSwing);
+    ctx.fillRect(2.5 * px, -3 * px, 1.5 * px, 5 * px - armSwing);
+
+    // 手（腐烂）
+    ctx.fillStyle = '#8B7355';
+    ctx.fillRect(-4.5 * px, 2 * px + armSwing, 2 * px, 1.5 * px);
+    ctx.fillRect(2.5 * px, 2 * px - armSwing, 2 * px, 1.5 * px);
+
+    // 头部
+    ctx.fillStyle = '#7A8B6A';
+    ctx.beginPath();
+    ctx.arc(0, -6 * px, 2.5 * px, 0, Math.PI * 2);
+    ctx.fill();
+
+    // 一只眼睛（另一只闭着/缺失）
+    ctx.fillStyle = '#FF0000';
+    ctx.beginPath();
+    ctx.arc(-1 * px, -6.5 * px, 0.6 * px, 0, Math.PI * 2);
+    ctx.fill();
+
+    // 嘴（张开，流血）
+    ctx.fillStyle = '#8B0000';
+    ctx.fillRect(-1 * px, -5 * px, 2 * px, 1.2 * px);
+    ctx.restore();
+
+    ctx.restore();
+  }
+
+  // 狙击机器人渲染
+  private renderSniperBot(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, px: number, flash: boolean, color: string, animFrame: number): void {
+    const walkCycle = Math.floor(animFrame / 12) % 4;
+    const legOffset = (walkCycle % 2 === 0 ? 1 : -1) * px;
+    const scopeGlow = Math.sin(animFrame * 0.2) * 0.5 + 0.5;
+
+    ctx.save();
+    ctx.translate(x + w / 2, y + h / 2);
+
+    if (flash) {
+      ctx.fillStyle = '#FFFFFF';
+      ctx.fillRect(-w / 2, -h / 2, w, h);
+    }
+
+    // 双腿（机械）
+    ctx.fillStyle = '#2A3A4A';
+    ctx.fillRect(-2.5 * px, 3 * px, 2 * px, 6 * px + legOffset);
+    ctx.fillRect(0.5 * px, 3 * px, 2 * px, 6 * px - legOffset);
+
+    // 脚
+    ctx.fillStyle = '#1A2A3A';
+    ctx.fillRect(-3 * px, 8 * px + legOffset, 2.5 * px, 1.5 * px);
+    ctx.fillRect(0.5 * px, 8 * px - legOffset, 2.5 * px, 1.5 * px);
+
+    // 身体（装甲）
+    ctx.fillStyle = '#4A90A4';
+    ctx.fillRect(-3.5 * px, -4 * px, 7 * px, 8 * px);
+
+    // 胸甲细节
+    ctx.fillStyle = '#3A7084';
+    ctx.fillRect(-3.5 * px, -4 * px, 7 * px, 2 * px);
+    ctx.fillStyle = '#5AA0B4';
+    ctx.fillRect(-2 * px, -2 * px, 4 * px, 1 * px);
+
+    // 狙击枪（长管）
+    ctx.fillStyle = '#1A1A1A';
+    ctx.fillRect(2 * px, -1 * px, 6 * px, 1.2 * px);
+    ctx.fillStyle = '#2A2A2A';
+    ctx.fillRect(7 * px, -0.8 * px, 1.5 * px, 0.8 * px);
+
+    // 瞄准镜
+    ctx.fillStyle = '#0A0A0A';
+    ctx.fillRect(3 * px, -2 * px, 3 * px, 1 * px);
+    // 瞄准镜红光（呼吸）
+    ctx.fillStyle = `rgba(255, 50, 50, ${0.5 + scopeGlow * 0.5})`;
+    ctx.beginPath();
+    ctx.arc(4.5 * px, -1.5 * px, 0.6 * px, 0, Math.PI * 2);
+    ctx.fill();
+
+    // 头部（传感器）
+    ctx.fillStyle = '#3A8094';
+    ctx.beginPath();
+    ctx.arc(0, -6 * px, 2.2 * px, 0, Math.PI * 2);
+    ctx.fill();
+
+    // 红色光学传感器（扫描线）
+    ctx.fillStyle = '#FF3333';
+    ctx.fillRect(-1.5 * px, -6.5 * px, 3 * px, 0.8 * px);
+    // 扫描光点
+    const scanX = -1.5 * px + (animFrame % 30) / 30 * 3 * px;
+    ctx.fillStyle = '#FFAAAA';
+    ctx.fillRect(scanX, -6.5 * px, 0.5 * px, 0.8 * px);
+
+    // 天线
+    ctx.strokeStyle = '#1A1A1A';
+    ctx.lineWidth = 0.5 * px;
+    ctx.beginPath();
+    ctx.moveTo(1.5 * px, -7 * px);
+    ctx.lineTo(2.5 * px, -9 * px);
+    ctx.stroke();
+    ctx.fillStyle = '#FF0000';
+    ctx.beginPath();
+    ctx.arc(2.5 * px, -9 * px, 0.4 * px, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.restore();
+  }
+
+  // 机械巨龙渲染（BOSS）
+  private renderCyberDragon(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, px: number, flash: boolean, color: string, animFrame: number): void {
+    const wingFlap = Math.sin(animFrame * 0.08) * 3 * px;
+    const tailSway = Math.sin(animFrame * 0.06) * 2 * px;
+    const eyeGlow = Math.sin(animFrame * 0.15) * 0.5 + 0.5;
+
+    ctx.save();
+    ctx.translate(x + w / 2, y + h / 2);
+
+    if (flash) {
+      ctx.fillStyle = '#FFFFFF';
+      ctx.fillRect(-w / 2, -h / 2, w, h);
+    }
+
+    // 翅膀（机械，后方）
+    ctx.fillStyle = '#2A2A4E';
+    ctx.beginPath();
+    ctx.moveTo(-2 * px, -2 * px);
+    ctx.lineTo(-12 * px, -8 * px - wingFlap);
+    ctx.lineTo(-8 * px, 2 * px);
+    ctx.closePath();
+    ctx.fill();
+    ctx.beginPath();
+    ctx.moveTo(2 * px, -2 * px);
+    ctx.lineTo(12 * px, -8 * px - wingFlap);
+    ctx.lineTo(8 * px, 2 * px);
+    ctx.closePath();
+    ctx.fill();
+
+    // 翅膀骨架
+    ctx.strokeStyle = '#4A4A6E';
+    ctx.lineWidth = 0.8 * px;
+    ctx.beginPath();
+    ctx.moveTo(-2 * px, -2 * px);
+    ctx.lineTo(-10 * px, -6 * px - wingFlap);
+    ctx.moveTo(2 * px, -2 * px);
+    ctx.lineTo(10 * px, -6 * px - wingFlap);
+    ctx.stroke();
+
+    // 尾巴（机械节段）
+    ctx.fillStyle = '#1A1A2E';
+    for (let i = 0; i < 4; i++) {
+      const tailX = -8 * px - i * 2 * px;
+      const tailY = 2 * px + i * 0.5 * px + tailSway * (i / 4);
+      ctx.fillRect(tailX, tailY, 2 * px, 1.5 * px);
+    }
+    // 尾刺
+    ctx.fillStyle = '#FF3333';
+    ctx.beginPath();
+    ctx.moveTo(-16 * px, 4 * px + tailSway);
+    ctx.lineTo(-18 * px, 5 * px + tailSway);
+    ctx.lineTo(-16 * px, 6 * px + tailSway);
+    ctx.closePath();
+    ctx.fill();
+
+    // 身体（机械装甲）
+    ctx.fillStyle = '#1A1A2E';
+    ctx.fillRect(-6 * px, -5 * px, 12 * px, 10 * px);
+
+    // 胸甲（冰蓝色能量核心）
+    ctx.fillStyle = '#2A2A4E';
+    ctx.fillRect(-5 * px, -4 * px, 10 * px, 8 * px);
+
+    // 能量核心（发光）
+    ctx.fillStyle = `rgba(0, 200, 255, ${0.6 + eyeGlow * 0.4})`;
+    ctx.beginPath();
+    ctx.arc(0, 0, 2 * px, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = `rgba(150, 230, 255, ${0.8 + eyeGlow * 0.2})`;
+    ctx.beginPath();
+    ctx.arc(0, 0, 1 * px, 0, Math.PI * 2);
+    ctx.fill();
+
+    // 装甲条纹
+    ctx.fillStyle = '#3A3A5E';
+    ctx.fillRect(-5 * px, -3 * px, 10 * px, 0.5 * px);
+    ctx.fillRect(-5 * px, 2 * px, 10 * px, 0.5 * px);
+
+    // 后腿
+    ctx.fillStyle = '#1A1A2E';
+    ctx.fillRect(-4 * px, 5 * px, 2.5 * px, 4 * px);
+    ctx.fillRect(1.5 * px, 5 * px, 2.5 * px, 4 * px);
+
+    // 龙头（机械）
+    ctx.fillStyle = '#2A2A4E';
+    ctx.beginPath();
+    ctx.moveTo(5 * px, -3 * px);
+    ctx.lineTo(10 * px, -2 * px);
+    ctx.lineTo(11 * px, 0);
+    ctx.lineTo(10 * px, 2 * px);
+    ctx.lineTo(5 * px, 3 * px);
+    ctx.closePath();
+    ctx.fill();
+
+    // 角（机械尖刺）
+    ctx.fillStyle = '#5A5A7E';
+    ctx.beginPath();
+    ctx.moveTo(7 * px, -3 * px);
+    ctx.lineTo(8 * px, -6 * px);
+    ctx.lineTo(9 * px, -3 * px);
+    ctx.closePath();
+    ctx.fill();
+
+    // 眼睛（冰蓝色，发光）
+    ctx.fillStyle = `rgba(0, 245, 255, ${0.7 + eyeGlow * 0.3})`;
+    ctx.beginPath();
+    ctx.arc(8 * px, -0.5 * px, 0.8 * px, 0, Math.PI * 2);
+    ctx.fill();
+
+    // 嘴/牙齿
+    ctx.fillStyle = '#8888AA';
+    ctx.fillRect(9 * px, 1 * px, 2 * px, 0.5 * px);
+    ctx.fillStyle = '#FF3333';
+    ctx.fillRect(9.5 * px, 1.5 * px, 0.4 * px, 0.8 * px);
+    ctx.fillRect(10.2 * px, 1.5 * px, 0.4 * px, 0.8 * px);
+
+    ctx.restore();
+  }
+
   private renderAssassin(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, px: number, flash: boolean, color: string, animFrame: number): void {
     const walkCycle = Math.floor(animFrame / 5) % 4;
     const bodyOffset = walkCycle < 2 ? 1.5 * px : 0;
@@ -7561,6 +8163,307 @@ export class GameEngine {
 
     ctx.restore();
   }
+  // 高达渲染（大型机械装甲单位）
+  private renderGundam(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, px: number, flash: boolean, color: string, animFrame: number): void {
+    const walkCycle = Math.floor(animFrame / 14) % 4;
+    const legOffset = (walkCycle % 2 === 0 ? 1 : -1) * px;
+    const eyeGlow = Math.sin(animFrame * 0.12) * 0.5 + 0.5;
+    const reactorPulse = Math.sin(animFrame * 0.1) * 0.3 + 0.7;
+
+    ctx.save();
+    ctx.translate(x + w / 2, y + h / 2);
+
+    if (flash) {
+      ctx.fillStyle = '#FFFFFF';
+      ctx.fillRect(-w / 2, -h / 2, w, h);
+    }
+
+    // 双腿（重型机械腿）
+    ctx.fillStyle = '#2A3A5A';
+    ctx.fillRect(-8 * px, 8 * px + legOffset, 6 * px, 14 * px);
+    ctx.fillRect(2 * px, 8 * px - legOffset, 6 * px, 14 * px);
+    // 腿部装甲细节
+    ctx.fillStyle = '#1A2A4A';
+    ctx.fillRect(-8 * px, 12 * px + legOffset, 6 * px, 2 * px);
+    ctx.fillRect(2 * px, 12 * px - legOffset, 6 * px, 2 * px);
+    ctx.fillStyle = '#4A5A7A';
+    ctx.fillRect(-7 * px, 16 * px + legOffset, 4 * px, 1 * px);
+    ctx.fillRect(3 * px, 16 * px - legOffset, 4 * px, 1 * px);
+    // 脚
+    ctx.fillStyle = '#1A1A2A';
+    ctx.fillRect(-9 * px, 21 * px + legOffset, 7 * px, 3 * px);
+    ctx.fillRect(2 * px, 21 * px - legOffset, 7 * px, 3 * px);
+
+    // 腰部
+    ctx.fillStyle = '#3A4A6A';
+    ctx.fillRect(-7 * px, 4 * px, 14 * px, 5 * px);
+    ctx.fillStyle = '#2A3A5A';
+    ctx.fillRect(-7 * px, 7 * px, 14 * px, 2 * px);
+
+    // 主身体（胸甲，大型）
+    ctx.fillStyle = '#3A4A6A';
+    ctx.fillRect(-12 * px, -10 * px, 24 * px, 16 * px);
+    // 胸甲左右分块
+    ctx.fillStyle = '#2A3A5A';
+    ctx.fillRect(-12 * px, -10 * px, 24 * px, 2 * px);
+    ctx.fillRect(-1 * px, -10 * px, 2 * px, 16 * px);
+    // 装甲条纹
+    ctx.fillStyle = '#4A5A7A';
+    ctx.fillRect(-11 * px, -7 * px, 9 * px, 1 * px);
+    ctx.fillRect(2 * px, -7 * px, 9 * px, 1 * px);
+    ctx.fillRect(-11 * px, -2 * px, 9 * px, 1 * px);
+    ctx.fillRect(2 * px, -2 * px, 9 * px, 1 * px);
+
+    // 核心反应堆（发光）
+    ctx.fillStyle = `rgba(0, 200, 255, ${0.6 + reactorPulse * 0.4})`;
+    ctx.beginPath();
+    ctx.arc(0, -2 * px, 2.5 * px, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = `rgba(180, 240, 255, ${0.8 + reactorPulse * 0.2})`;
+    ctx.beginPath();
+    ctx.arc(0, -2 * px, 1.2 * px, 0, Math.PI * 2);
+    ctx.fill();
+
+    // 双臂（重型机械臂）
+    ctx.fillStyle = '#2A3A5A';
+    ctx.fillRect(-16 * px, -8 * px, 5 * px, 14 * px);
+    ctx.fillRect(11 * px, -8 * px, 5 * px, 14 * px);
+    // 肩甲（带尖刺）
+    ctx.fillStyle = '#4A5A7A';
+    ctx.beginPath();
+    ctx.moveTo(-16 * px, -10 * px);
+    ctx.lineTo(-12 * px, -14 * px);
+    ctx.lineTo(-8 * px, -10 * px);
+    ctx.closePath();
+    ctx.fill();
+    ctx.beginPath();
+    ctx.moveTo(16 * px, -10 * px);
+    ctx.lineTo(12 * px, -14 * px);
+    ctx.lineTo(8 * px, -10 * px);
+    ctx.closePath();
+    ctx.fill();
+    // 手部（握盾/光剑）
+    ctx.fillStyle = '#1A1A2A';
+    ctx.fillRect(-17 * px, 5 * px, 6 * px, 4 * px);
+    ctx.fillRect(11 * px, 5 * px, 6 * px, 4 * px);
+    // 右手光剑（发光）
+    ctx.fillStyle = `rgba(0, 245, 212, ${0.7 + eyeGlow * 0.3})`;
+    ctx.fillRect(13.5 * px, -18 * px, 1.5 * px, 23 * px);
+    ctx.fillStyle = `rgba(180, 255, 240, ${0.9})`;
+    ctx.fillRect(13.8 * px, -18 * px, 0.8 * px, 23 * px);
+
+    // 头部（机械，带V字天线）
+    ctx.fillStyle = '#3A4A6A';
+    ctx.beginPath();
+    ctx.arc(0, -14 * px, 4 * px, 0, Math.PI * 2);
+    ctx.fill();
+    // 面甲
+    ctx.fillStyle = '#1A1A2A';
+    ctx.fillRect(-3 * px, -15 * px, 6 * px, 3 * px);
+    // 双眼（发光传感器）
+    ctx.fillStyle = `rgba(255, 50, 50, ${0.7 + eyeGlow * 0.3})`;
+    ctx.fillRect(-2.5 * px, -14 * px, 1.8 * px, 1 * px);
+    ctx.fillRect(0.7 * px, -14 * px, 1.8 * px, 1 * px);
+    // V字天线
+    ctx.strokeStyle = '#FFD700';
+    ctx.lineWidth = 1.2 * px;
+    ctx.beginPath();
+    ctx.moveTo(-3 * px, -17 * px);
+    ctx.lineTo(-5 * px, -21 * px);
+    ctx.moveTo(3 * px, -17 * px);
+    ctx.lineTo(5 * px, -21 * px);
+    ctx.stroke();
+
+    // 背部推进器（喷射火焰）
+    ctx.fillStyle = `rgba(255, 150, 50, ${0.5 + reactorPulse * 0.3})`;
+    ctx.beginPath();
+    ctx.moveTo(-8 * px, -8 * px);
+    ctx.lineTo(-10 * px, -16 * px - reactorPulse * 4);
+    ctx.lineTo(-6 * px, -8 * px);
+    ctx.closePath();
+    ctx.fill();
+    ctx.beginPath();
+    ctx.moveTo(8 * px, -8 * px);
+    ctx.lineTo(10 * px, -16 * px - reactorPulse * 4);
+    ctx.lineTo(6 * px, -8 * px);
+    ctx.closePath();
+    ctx.fill();
+
+    ctx.restore();
+  }
+
+  // 异形渲染（高攻击快速怪物）
+  private renderAlien(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, px: number, flash: boolean, color: string, animFrame: number): void {
+    const walkCycle = Math.floor(animFrame / 6) % 4;
+    const bodyOffset = walkCycle < 2 ? 1 * px : 0;
+    const tailSway = Math.sin(animFrame * 0.15) * 2 * px;
+    const mouthOpen = Math.sin(animFrame * 0.2) * 0.5 + 0.5;
+    const eyeGlow = Math.sin(animFrame * 0.18) * 0.4 + 0.6;
+
+    ctx.save();
+    ctx.translate(x + w / 2, y + h / 2);
+
+    if (flash) {
+      ctx.fillStyle = '#FFFFFF';
+      ctx.fillRect(-w / 2, -h / 2, w, h);
+    }
+
+    // 尾巴（长鞭状，带毒刺）
+    ctx.strokeStyle = '#1A3A1A';
+    ctx.lineWidth = 2 * px;
+    ctx.beginPath();
+    ctx.moveTo(-6 * px, 2 * px);
+    ctx.quadraticCurveTo(-14 * px + tailSway, 4 * px, -20 * px + tailSway * 1.5, 10 * px);
+    ctx.stroke();
+    // 尾巴尖刺
+    ctx.fillStyle = '#8B0000';
+    ctx.beginPath();
+    ctx.moveTo(-20 * px + tailSway * 1.5, 10 * px);
+    ctx.lineTo(-23 * px + tailSway * 1.5, 8 * px);
+    ctx.lineTo(-22 * px + tailSway * 1.5, 12 * px);
+    ctx.closePath();
+    ctx.fill();
+
+    // 后腿（弯曲，兽性）
+    ctx.fillStyle = '#2A4A2A';
+    ctx.beginPath();
+    ctx.moveTo(-7 * px, 6 * px + bodyOffset);
+    ctx.lineTo(-9 * px, 14 * px + bodyOffset);
+    ctx.lineTo(-4 * px, 18 * px + bodyOffset);
+    ctx.lineTo(-2 * px, 10 * px + bodyOffset);
+    ctx.closePath();
+    ctx.fill();
+    ctx.beginPath();
+    ctx.moveTo(7 * px, 6 * px - bodyOffset);
+    ctx.lineTo(9 * px, 14 * px - bodyOffset);
+    ctx.lineTo(4 * px, 18 * px - bodyOffset);
+    ctx.lineTo(2 * px, 10 * px - bodyOffset);
+    ctx.closePath();
+    ctx.fill();
+    // 利爪脚
+    ctx.fillStyle = '#1A1A0A';
+    ctx.beginPath();
+    ctx.moveTo(-5 * px, 18 * px + bodyOffset);
+    ctx.lineTo(-7 * px, 21 * px + bodyOffset);
+    ctx.lineTo(-3 * px, 21 * px + bodyOffset);
+    ctx.closePath();
+    ctx.fill();
+    ctx.beginPath();
+    ctx.moveTo(5 * px, 18 * px - bodyOffset);
+    ctx.lineTo(7 * px, 21 * px - bodyOffset);
+    ctx.lineTo(3 * px, 21 * px - bodyOffset);
+    ctx.closePath();
+    ctx.fill();
+
+    // 主身体（流线型，带外骨骼）
+    ctx.fillStyle = '#2A4A2A';
+    ctx.beginPath();
+    ctx.ellipse(0, 0 + bodyOffset, 11 * px, 8 * px, 0, 0, Math.PI * 2);
+    ctx.fill();
+    // 背部外骨骼脊（深色）
+    ctx.fillStyle = '#1A3A1A';
+    ctx.beginPath();
+    ctx.ellipse(0, -2 * px + bodyOffset, 9 * px, 2 * px, 0, 0, Math.PI * 2);
+    ctx.fill();
+    // 背刺（多个尖刺）
+    ctx.fillStyle = '#3A5A3A';
+    for (let i = -2; i <= 2; i++) {
+      const sx = i * 3 * px;
+      ctx.beginPath();
+      ctx.moveTo(sx - 1 * px, -3 * px + bodyOffset);
+      ctx.lineTo(sx, -7 * px + bodyOffset);
+      ctx.lineTo(sx + 1 * px, -3 * px + bodyOffset);
+      ctx.closePath();
+      ctx.fill();
+    }
+
+    // 前肢（长利爪，攻击姿态）
+    ctx.fillStyle = '#2A4A2A';
+    ctx.beginPath();
+    ctx.moveTo(-8 * px, -2 * px + bodyOffset);
+    ctx.lineTo(-14 * px, 2 * px + bodyOffset);
+    ctx.lineTo(-13 * px, 6 * px + bodyOffset);
+    ctx.lineTo(-7 * px, 4 * px + bodyOffset);
+    ctx.closePath();
+    ctx.fill();
+    ctx.beginPath();
+    ctx.moveTo(8 * px, -2 * px + bodyOffset);
+    ctx.lineTo(14 * px, 2 * px + bodyOffset);
+    ctx.lineTo(13 * px, 6 * px + bodyOffset);
+    ctx.lineTo(7 * px, 4 * px + bodyOffset);
+    ctx.closePath();
+    ctx.fill();
+    // 长利爪（4只）
+    ctx.fillStyle = '#0A0A0A';
+    for (let i = 0; i < 3; i++) {
+      const cy = 3 * px + i * 1.5 * px + bodyOffset;
+      ctx.beginPath();
+      ctx.moveTo(-14 * px, cy);
+      ctx.lineTo(-19 * px, cy + 1 * px);
+      ctx.lineTo(-14 * px, cy + 2 * px);
+      ctx.closePath();
+      ctx.fill();
+      ctx.beginPath();
+      ctx.moveTo(14 * px, cy);
+      ctx.lineTo(19 * px, cy + 1 * px);
+      ctx.lineTo(14 * px, cy + 2 * px);
+      ctx.closePath();
+      ctx.fill();
+    }
+
+    // 头部（延伸，带内巢嘴）
+    ctx.fillStyle = '#2A4A2A';
+    ctx.beginPath();
+    ctx.ellipse(0, -10 * px + bodyOffset, 7 * px, 5 * px, 0, 0, Math.PI * 2);
+    ctx.fill();
+    // 头部脊骨
+    ctx.fillStyle = '#1A3A1A';
+    ctx.beginPath();
+    ctx.ellipse(0, -12 * px + bodyOffset, 5 * px, 1.5 * px, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    // 嘴（内巢嘴，可张开）
+    const mouthHeight = 1 * px + mouthOpen * 2 * px;
+    ctx.fillStyle = '#0A0A0A';
+    ctx.fillRect(-3 * px, -8 * px + bodyOffset, 6 * px, mouthHeight);
+    // 内巢牙齿（多圈）
+    ctx.fillStyle = '#DDDDAA';
+    for (let i = 0; i < 5; i++) {
+      const tx = -2.5 * px + i * 1.2 * px;
+      ctx.beginPath();
+      ctx.moveTo(tx, -8 * px + bodyOffset);
+      ctx.lineTo(tx + 0.4 * px, -8 * px + mouthHeight * 0.7 + bodyOffset);
+      ctx.lineTo(tx + 0.8 * px, -8 * px + bodyOffset);
+      ctx.closePath();
+      ctx.fill();
+      ctx.beginPath();
+      ctx.moveTo(tx, -8 * px + mouthHeight + bodyOffset);
+      ctx.lineTo(tx + 0.4 * px, -8 * px + mouthHeight * 0.3 + bodyOffset);
+      ctx.lineTo(tx + 0.8 * px, -8 * px + mouthHeight + bodyOffset);
+      ctx.closePath();
+      ctx.fill();
+    }
+
+    // 双眼（发光，嗜血）
+    ctx.fillStyle = `rgba(255, 220, 0, ${0.7 + eyeGlow * 0.3})`;
+    ctx.beginPath();
+    ctx.arc(-3.5 * px, -11 * px + bodyOffset, 1 * px, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.arc(3.5 * px, -11 * px + bodyOffset, 1 * px, 0, Math.PI * 2);
+    ctx.fill();
+
+    // 唾液（毒液滴）
+    if (mouthOpen > 0.6) {
+      ctx.fillStyle = `rgba(100, 200, 50, ${mouthOpen})`;
+      ctx.beginPath();
+      ctx.arc(0, -6 * px + bodyOffset, 0.6 * px, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    ctx.restore();
+  }
+
   private renderSandbag(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, isFlash: boolean): void {
     const baseColor = isFlash ? '#FFFFFF' : '#A08060';
     const darkColor = isFlash ? '#DDDDDD' : '#7A5A3A';

@@ -509,17 +509,41 @@ const DebugPanel: React.FC<DebugPanelProps> = ({ engineRef }) => {
         {/* 装备生成 */}
         <div style={{ marginBottom: '14px' }}>
           <div style={sectionTitle}>装备生成</div>
-          <button
-            onClick={() => {
-              const mythicSet = EQUIP_SLOTS.map(slot => createEquipment(slot, 'mythic', 1));
-              syncBoth(mythicSet, equipmentStorage);
-            }}
-            style={btnStyle(neonRed)}
-            onMouseEnter={(e) => { e.currentTarget.style.background = `${neonRed}20`; }}
-            onMouseLeave={(e) => { e.currentTarget.style.background = `${neonRed}10`; }}
-          >
-            生成神话9件套 (Lv.1)
-          </button>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+            <button
+              onClick={() => {
+                const mythicSet = EQUIP_SLOTS.map(slot => createEquipment(slot, 'mythic', 1));
+                syncBoth(mythicSet, equipmentStorage);
+              }}
+              style={btnStyle(neonRed)}
+              onMouseEnter={(e) => { e.currentTarget.style.background = `${neonRed}20`; }}
+              onMouseLeave={(e) => { e.currentTarget.style.background = `${neonRed}10`; }}
+            >
+              生成神话9件套 (Lv.1)
+            </button>
+            <button
+              onClick={() => {
+                const epicSet = EQUIP_SLOTS.map(slot => createEquipment(slot, 'epic', 1));
+                syncBoth(epicSet, equipmentStorage);
+              }}
+              style={btnStyle('#FFD700')}
+              onMouseEnter={(e) => { e.currentTarget.style.background = '#FFD70020'; }}
+              onMouseLeave={(e) => { e.currentTarget.style.background = '#FFD70010'; }}
+            >
+              生成史诗9件套 (Lv.1)
+            </button>
+            <button
+              onClick={() => {
+                const legendarySet = EQUIP_SLOTS.map(slot => createEquipment(slot, 'legendary', 1));
+                syncBoth(legendarySet, equipmentStorage);
+              }}
+              style={btnStyle('#FF8C00')}
+              onMouseEnter={(e) => { e.currentTarget.style.background = '#FF8C0020'; }}
+              onMouseLeave={(e) => { e.currentTarget.style.background = '#FF8C0010'; }}
+            >
+              生成传说9件套 (Lv.1)
+            </button>
+          </div>
         </div>
 
         {/* 沙袋控制 */}

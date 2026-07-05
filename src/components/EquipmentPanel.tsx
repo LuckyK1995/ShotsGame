@@ -26,30 +26,46 @@ function hexToRgba(hex: string, alpha: number): string {
   return `rgba(${r}, ${g}, ${b}, ${alpha})`;
 }
 
-const itemSlotStyle = (rarity: EquipRarity) => {
+const itemSlotStyle = (rarity: EquipRarity, marqueeColor?: string) => {
   const baseColor = RARITY_COLORS[rarity] || RARITY_COLORS.common;
   const borderAlpha: Record<EquipRarity, number> = {
     common: 0.3, advanced: 0.4, fine: 0.5,
     legendary: 0.55, epic: 0.6, mythic: 0.65,
   };
   const glowBlur: Record<EquipRarity, number> = {
-    common: 0, advanced: 6, fine: 8,
-    legendary: 10, epic: 12, mythic: 14,
+    common: 0, advanced: 0, fine: 0,
+    legendary: 0, epic: 0, mythic: 0,
   };
   const glowAlpha: Record<EquipRarity, number> = {
-    common: 0, advanced: 0.2, fine: 0.25,
-    legendary: 0.3, epic: 0.35, mythic: 0.4,
+    common: 0, advanced: 0, fine: 0,
+    legendary: 0, epic: 0, mythic: 0,
   };
-  // 传说/史诗/神话使用渐变背景，与边框颜色区分
   const rarityGradient: Record<string, string> = {
-    legendary: 'radial-gradient(circle at 50% 40%, #7A3A1A 0%, #3D1A08 60%, #1F0E04 100%)',
-    epic: 'radial-gradient(circle at 50% 40%, #4A2A7A 0%, #1E0E3D 60%, #0E0620 100%)',
-    mythic: 'radial-gradient(circle at 50% 40%, #7A1A2A 0%, #3D0A12 60%, #1F0508 100%)',
+    common: 'radial-gradient(circle at 50% 45%, #2A2540 0%, #1E1A35 55%, #15122A 100%)',
+    advanced: 'radial-gradient(circle at 50% 45%, #253050 0%, #1A2540 55%, #101830 100%)',
+    fine: 'radial-gradient(circle at 50% 45%, #3A2855 0%, #2A1C45 55%, #1E1035 100%)',
+    legendary: 'radial-gradient(circle at 50% 40%, #8A4A2A 0%, #5A2A10 60%, #3A1A08 100%)',
+    epic: 'radial-gradient(circle at 50% 40%, #7A6A20 0%, #4D4010 60%, #2F2808 100%)',
+    mythic: 'radial-gradient(circle at 50% 40%, #8A2A3A 0%, #5A1A20 60%, #3A0A10 100%)',
   };
   const blur = glowBlur[rarity] || 0;
   const glow = blur > 0 ? `0 0 ${blur}px ${hexToRgba(baseColor, glowAlpha[rarity] || 0)}` : 'none';
+
+  if (marqueeColor) {
+    return {
+      background: rarityGradient[rarity],
+      border: '2.5px solid transparent',
+      borderRadius: '8px',
+      boxShadow: 'none',
+      cursor: 'pointer',
+      ['--mc' as any]: marqueeColor,
+      position: 'relative' as const,
+      overflow: 'visible' as const,
+    };
+  }
+
   return {
-    background: rarityGradient[rarity] || 'rgba(19, 16, 37, 0.6)',
+    background: rarityGradient[rarity],
     border: `2.5px solid ${hexToRgba(baseColor, borderAlpha[rarity] || 0.3)}`,
     borderRadius: '8px',
     boxShadow: glow,
@@ -270,22 +286,25 @@ const EquipmentPanel: React.FC<EquipmentPanelProps> = ({ onTabChange, engineRef,
 
   return (
     <div className="h-full flex relative gap-2" style={{ color: '#E0E0FF' }}>
-      {/* 跑马灯动画 keyframes：整圈虚线，每帧转1/3边，12帧转满一圈 */}
+      {/* 跑马灯样式：SVG 虚线边框，5px实5px空，5px/秒顺时针流动 */}
       <style>{`
-        @keyframes setMarquee {
-          0%   { border-color: var(--mc) var(--mc) var(--mc) transparent; border-style: dashed dashed dashed solid; }
-          8%   { border-color: var(--mc) var(--mc) transparent transparent; border-style: dashed dashed solid solid; }
-          17%  { border-color: var(--mc) var(--mc) transparent var(--mc); border-style: dashed dashed solid dashed; }
-          25%  { border-color: var(--mc) transparent transparent var(--mc); border-style: dashed solid solid dashed; }
-          33%  { border-color: transparent transparent var(--mc) var(--mc); border-style: solid solid dashed dashed; }
-          42%  { border-color: transparent var(--mc) var(--mc) var(--mc); border-style: solid dashed dashed dashed; }
-          50%  { border-color: var(--mc) var(--mc) var(--mc) transparent; border-style: dashed dashed dashed solid; }
-          58%  { border-color: var(--mc) var(--mc) transparent transparent; border-style: dashed dashed solid solid; }
-          67%  { border-color: var(--mc) var(--mc) transparent var(--mc); border-style: dashed dashed solid dashed; }
-          75%  { border-color: var(--mc) transparent transparent var(--mc); border-style: dashed solid solid dashed; }
-          83%  { border-color: transparent transparent var(--mc) var(--mc); border-style: solid solid dashed dashed; }
-          92%  { border-color: transparent var(--mc) var(--mc) var(--mc); border-style: solid dashed dashed dashed; }
-          100% { border-color: var(--mc) var(--mc) var(--mc) transparent; border-style: dashed dashed dashed solid; }
+        .marquee-slot .marquee-border {
+          position: absolute;
+          top: -2.5px; left: -2.5px;
+          width: calc(100% + 5px);
+          height: calc(100% + 5px);
+          pointer-events: none;
+        }
+        .marquee-slot .marquee-border rect {
+          fill: none;
+          stroke: var(--mc);
+          stroke-width: 2.5;
+          stroke-dasharray: 5 5;
+          animation: marqueeDash 2s linear infinite;
+        }
+        @keyframes marqueeDash {
+          0%   { stroke-dashoffset: 0; }
+          100% { stroke-dashoffset: -10; }
         }
       `}</style>
       <div className="w-1/3 flex flex-col gap-1.5">
@@ -301,22 +320,14 @@ const EquipmentPanel: React.FC<EquipmentPanelProps> = ({ onTabChange, engineRef,
             return (
               <div
                 key={slot}
-                className="flex flex-col items-center justify-center cursor-pointer relative"
-                style={{ width: '36px', height: '36px', ...(equip ? itemSlotStyle(equip.rarity) : emptySlotStyle) }}
+                className={`flex flex-col items-center justify-center cursor-pointer relative ${marqueeColor ? 'marquee-slot' : ''}`}
+                style={{ width: '36px', height: '36px', ...(equip ? itemSlotStyle(equip.rarity, marqueeColor) : emptySlotStyle), ...(marqueeColor ? { ['--mc' as any]: marqueeColor } : {}) }}
                 onClick={() => equip && handleEquippedClick(equip)}
               >
-                {/* 跑马灯边框特效（成套时） */}
-                {equip && marqueeColor && (
-                  <div
-                    className="absolute inset-0 pointer-events-none"
-                    style={{
-                      border: '2px solid',
-                      borderRadius: '8px',
-                      ['--mc' as any]: marqueeColor,
-                      animation: 'setMarquee 2s linear infinite',
-                      boxShadow: `0 0 8px ${marqueeColor}66`,
-                    }}
-                  />
+                {marqueeColor && (
+                  <svg className="marquee-border" viewBox="0 0 36 36">
+                    <rect x="1.25" y="1.25" width="33.5" height="33.5" rx="8" ry="8" />
+                  </svg>
                 )}
                 {equip ? (
                   <>

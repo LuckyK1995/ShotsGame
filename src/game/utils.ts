@@ -141,6 +141,17 @@ export function resetBullet(bullet: Bullet, x: number, y: number, damage: number
   b.waveLvl = 0;
   b.wavePhase = 0;
   b.cloneIdx = -1;
+  // 清理敌方抛物线子弹相关字段（防止对象池复用时残留导致玩家自伤）
+  b.isParabolic = false;
+  b.isEnemyProjectile = false;
+  b.startX = 0;
+  b.startY = 0;
+  b.targetX = 0;
+  b.targetY = 0;
+  b.flightProgress = 0;
+  b.flightTime = 0;
+  b.arcHeight = 0;
+  b.shooter = null;
 }
 
 export function createEnemy(): Enemy {
