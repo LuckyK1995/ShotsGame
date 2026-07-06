@@ -89,7 +89,7 @@ export function EquipmentBar() {
                 }}
               >
                 {equip ? (
-                  <EquipmentIcon slot={equip.slot} rarity={equip.rarity} variant={equip.iconVariant} size={36} />
+                  <EquipmentIcon slot={equip.slot} rarity={equip.rarity} variant={equip.iconVariant} size={36} gemCount={equip.socketedGems?.length || 0} enhanceLevel={equip.enhanceLevel || 0} level={equip.level} />
                 ) : (
                   <span className="text-[#7D6D5D] text-xs" style={{ fontFamily: '"Press Start 2P", monospace', fontSize: '6px' }}>
                     {slotLabels[slot]}

@@ -10,6 +10,10 @@ interface GameStore {
   equipmentStorage: Equipment[];
   // 宝石背包：所有宝石以 ItemStack 形式堆叠存储（itemId = gem_xxx_yyy）
   gemInventory: ItemStack[];
+  // 强化道具背包：4 种强化用品堆叠
+  enhanceItemInventory: ItemStack[];
+  // 附魔书背包：5 种属性 × 6 种品质
+  enchantItemInventory: ItemStack[];
   buffs: Buff[];
   activeSkills: ActiveSkill[];
   talentChoices: Talent[];
@@ -30,6 +34,8 @@ interface GameStore {
   setEquipment: (equipment: Equipment[]) => void;
   setEquipmentStorage: (storage: Equipment[]) => void;
   setGemInventory: (gems: ItemStack[]) => void;
+  setEnhanceItemInventory: (items: ItemStack[]) => void;
+  setEnchantItemInventory: (items: ItemStack[]) => void;
   setBuffs: (buffs: Buff[]) => void;
   setActiveSkills: (skills: ActiveSkill[]) => void;
   setTalentChoices: (choices: Talent[]) => void;
@@ -51,6 +57,8 @@ export const useGameStore = create<GameStore>((set) => ({
   equipment: [],
   equipmentStorage: [],
   gemInventory: [],
+  enhanceItemInventory: [],
+  enchantItemInventory: [],
   buffs: [],
   activeSkills: [],
   talentChoices: [],
@@ -69,6 +77,8 @@ export const useGameStore = create<GameStore>((set) => ({
   setEquipment: (equipment) => set({ equipment }),
   setEquipmentStorage: (storage) => set({ equipmentStorage: storage }),
   setGemInventory: (gemInventory) => set({ gemInventory }),
+  setEnhanceItemInventory: (enhanceItemInventory) => set({ enhanceItemInventory }),
+  setEnchantItemInventory: (enchantItemInventory) => set({ enchantItemInventory }),
   setBuffs: (buffs) => set({ buffs }),
   setActiveSkills: (activeSkills) => set({ activeSkills }),
   setTalentChoices: (talentChoices) => set({ talentChoices }),

@@ -2,9 +2,17 @@ import React, { useState, useCallback, useMemo, useEffect } from 'react';
 import { useGameStore } from '../store/gameStore';
 import { EquipmentIcon } from './EquipmentIcon';
 import { GemEmbedModal } from './GemEmbedModal';
+import { EnhanceModal } from './EnhanceModal';
+import { EnhanceItemIcon } from './EnhanceItemIcon';
+import { EnchantModal } from './EnchantModal';
+import { EnchantItemIcon } from './EnchantItemIcon';
 import { Equipment, EquipSlot, EquipRarity, SocketedGem } from '../game/types/game';
 import { getEquipmentBonus, getRarityName, RARITY_COLORS, EQUIP_SLOTS, SLOT_LABELS, isEquipmentInActiveSet, getQualitySetGroups, RARITY_LABELS, createEquipment } from '../game/data/equipment';
 import { GEM_TYPE_INFO, GEM_RARITY_LABELS, GEM_RARITY_BG, GEM_RARITY_BORDER, getGemDef, MAX_GEM_SOCKETS, GEMS } from '../game/data/gems';
+import { ENHANCE_ITEMS, ENHANCE_ITEM_ORDER, getEnhanceItemDef, getEnhanceAttackBonus } from '../game/data/enhanceItems';
+import type { EnhanceItemId } from '../game/data/enhanceItems';
+import { ENCHANT_ITEMS, ENCHANT_ITEM_ORDER, ENCHANT_STAT_INFO, getEnchantItemDef } from '../game/data/enchantItems';
+import type { EnchantItemId, EnchantStat } from '../game/data/enchantItems';
 
 // 出售价格表（按品质）
 const raritySellMap: Record<EquipRarity, number> = {
@@ -108,6 +116,20 @@ interface GameEngineRef {
       reset: boolean;
       reason?: string;
     } | null;
+    enhanceEquipment: (
+      equipmentId: string,
+      source: 'equipped' | 'storage',
+      mode: 'gold' | 'item',
+      itemId?: string
+    ) => { success: boolean; reason?: string; newLevel: number; goldCost: number; failResult?: string } | null;
+    enchantEquipment: (
+      equipmentId: string,
+      source: 'equipped' | 'storage',
+      itemId: string
+    ) => { success: boolean; reason?: string; stat?: EnchantStat; percent?: number } | null;
+    synthEnchantItem: (
+      itemId: string
+    ) => { success: boolean; reason?: string; newItemId?: string } | null;
   } | null;
 }
 
@@ -123,6 +145,8 @@ const EquipmentPanel: React.FC<EquipmentPanelProps> = ({ onTabChange, engineRef,
   const equipment = useGameStore(s => s.equipment);
   const equipmentStorage = useGameStore(s => s.equipmentStorage);
   const gemInventory = useGameStore(s => s.gemInventory);
+  const enhanceItemInventory = useGameStore(s => s.enhanceItemInventory);
+  const enchantItemInventory = useGameStore(s => s.enchantItemInventory);
   const playerLevel = useGameStore(s => s.player?.level ?? 0);
   const setEquipment = useGameStore(s => s.setEquipment);
   const setEquipmentStorage = useGameStore(s => s.setEquipmentStorage);
@@ -135,7 +159,13 @@ const EquipmentPanel: React.FC<EquipmentPanelProps> = ({ onTabChange, engineRef,
   >(null);
   // 宝石详情弹窗：点击宝石仓库中的宝石格子时弹出
   const [selectedGem, setSelectedGem] = useState<{ gemId: string; count: number } | null>(null);
+  // 强化道具详情弹窗：点击强化仓库中的道具格子时弹出
+  const [selectedEnhanceItem, setSelectedEnhanceItem] = useState<{ itemId: EnhanceItemId; count: number } | null>(null);
+  // 附魔书详情弹窗：点击附魔仓库中的书格子时弹出
+  const [selectedEnchantItem, setSelectedEnchantItem] = useState<{ itemId: EnchantItemId; count: number } | null>(null);
   const [showEmbedModal, setShowEmbedModal] = useState(false);
+  const [showEnhanceModal, setShowEnhanceModal] = useState(false);
+  const [showEnchantModal, setShowEnchantModal] = useState(false);
   const [sortDesc, setSortDesc] = useState(true); // true=由高到低，false=由低到高
   const [showSellPicker, setShowSellPicker] = useState(false);
   // 缓存勾选的品质（localStorage），避免重复操作
@@ -333,7 +363,7 @@ const EquipmentPanel: React.FC<EquipmentPanelProps> = ({ onTabChange, engineRef,
         >
           已装备 ({equipment.length}/9)
         </div>
-        <div className="grid grid-cols-3 gap-1">
+        <div className="grid grid-cols-3 gap-1 place-items-center mx-auto">
           {EQUIP_SLOTS.map((slot) => {
             const equip = getEquipForSlot(slot);
             const marqueeColor = equip ? getSetMarqueeColor(equip) : null;
@@ -351,18 +381,7 @@ const EquipmentPanel: React.FC<EquipmentPanelProps> = ({ onTabChange, engineRef,
                 )}
                 {equip ? (
                   <>
-                    <EquipmentIcon slot={equip.slot} rarity={equip.rarity} variant={equip.iconVariant} size={28} />
-                    <span
-                      className="absolute bottom-0.5 left-1"
-                      style={{
-                        fontFamily: '"Rajdhani", "Orbitron", monospace',
-                        fontSize: '8px',
-                        color: '#FFFFFF',
-                        textShadow: '0 0 4px rgba(255,255,255,0.5)',
-                      }}
-                    >
-                      {equip.level}
-                    </span>
+                    <EquipmentIcon slot={equip.slot} rarity={equip.rarity} variant={equip.iconVariant} size={28} gemCount={equip.socketedGems?.length || 0} enhanceLevel={equip.enhanceLevel || 0} level={equip.level} />
                   </>
                 ) : (
                   <span
@@ -381,7 +400,7 @@ const EquipmentPanel: React.FC<EquipmentPanelProps> = ({ onTabChange, engineRef,
           })}
         </div>
 
-        {/* 查看属性按钮：宽度=三个格子+两个间距 */}
+        {/* 查看属性按钮 */}
         <button
           onClick={() => onShowStats?.()}
           style={{
@@ -400,6 +419,29 @@ const EquipmentPanel: React.FC<EquipmentPanelProps> = ({ onTabChange, engineRef,
           }}
         >
           查看属性
+        </button>
+        {/* 修理装备按钮 */}
+        <button
+          onClick={() => {
+            if (engineRef?.current) {
+              (engineRef.current as any).repairAllEquipment?.();
+            }
+          }}
+          style={{
+            fontFamily: '"Rajdhani", "Orbitron", monospace',
+            fontSize: '8px',
+            fontWeight: 600,
+            color: '#FF6B35',
+            background: 'rgba(255, 107, 53, 0.1)',
+            border: '1px solid rgba(255, 107, 53, 0.3)',
+            borderRadius: '6px',
+            boxShadow: '0 0 6px rgba(255, 107, 53, 0.1)',
+            padding: '4px 0',
+            cursor: 'pointer',
+            width: '100%',
+          }}
+        >
+          修理装备
         </button>
       </div>
 
@@ -481,18 +523,7 @@ const EquipmentPanel: React.FC<EquipmentPanelProps> = ({ onTabChange, engineRef,
                     >
                       {item ? (
                         <>
-                          <EquipmentIcon slot={item.slot} rarity={item.rarity} variant={item.iconVariant} size={28} />
-                          <span
-                            className="absolute bottom-0.5 left-1"
-                            style={{
-                              fontFamily: '"Rajdhani", "Orbitron", monospace',
-                              fontSize: '8px',
-                              color: '#FFFFFF',
-                              textShadow: '0 0 4px rgba(255,255,255,0.5)',
-                            }}
-                          >
-                            {item.level}
-                          </span>
+                          <EquipmentIcon slot={item.slot} rarity={item.rarity} variant={item.iconVariant} size={28} gemCount={item.socketedGems?.length || 0} enhanceLevel={item.enhanceLevel || 0} level={item.level} />
                         </>
                       ) : null}
                     </div>
@@ -646,8 +677,159 @@ const EquipmentPanel: React.FC<EquipmentPanelProps> = ({ onTabChange, engineRef,
               ))}
             </div>
           </div>
+        ) : storageTab === 'enhance' ? (
+          /* 强化页签：与宝石页签一致的网格布局，展示强化道具 */
+          <div
+            className="flex-1 overflow-y-auto p-1.5"
+            style={{
+              background: 'rgba(13, 11, 26, 0.4)',
+              borderRadius: '8px',
+              border: '1px solid rgba(176, 38, 255, 0.1)',
+            }}
+          >
+            <div
+              className="grid gap-1"
+              style={{
+                gridTemplateColumns: 'repeat(5, 36px)',
+                rowGap: '1px',
+                justifyContent: 'space-between',
+              }}
+            >
+              {ENHANCE_ITEM_ORDER.map(id => {
+                const def = ENHANCE_ITEMS[id];
+                const stack = enhanceItemInventory.find(s => s.itemId === id);
+                const count = stack?.count ?? 0;
+                const rarityColor = RARITY_COLORS[def.rarity] || '#9A9A9A';
+                return (
+                  <div
+                    key={id}
+                    className="flex flex-col items-center justify-center relative cursor-pointer"
+                    style={{
+                      width: '36px',
+                      height: '36px',
+                      marginBottom: '1px',
+                      background: `radial-gradient(circle at 50% 40%, ${rarityColor}33 0%, ${rarityColor}11 55%, #15122A 100%)`,
+                      border: `2.5px solid ${rarityColor}`,
+                      borderRadius: '8px',
+                      opacity: count > 0 ? 1 : 0.4,
+                    }}
+                    title={`${def.name} ×${count}\n${def.description}`}
+                    onClick={() => count > 0 && setSelectedEnhanceItem({ itemId: id, count })}
+                  >
+                    <EnhanceItemIcon itemId={id} size={28} />
+                    {/* 右下角：数量 */}
+                    {count > 0 && (
+                      <span
+                        className="absolute bottom-0.5 right-0.5"
+                        style={{
+                          fontFamily: '"Rajdhani", "Orbitron", monospace',
+                          fontSize: '7px',
+                          color: '#0D0B1A',
+                          backgroundColor: neonCyan,
+                          borderRadius: '3px',
+                          fontWeight: 700,
+                          padding: '0 3px',
+                        }}
+                      >
+                        {count}
+                      </span>
+                    )}
+                  </div>
+                );
+              })}
+              {/* 空格子占位填充（与物品栏一致） */}
+              {Array(Math.max(0, 11 - ENHANCE_ITEM_ORDER.length)).fill(null).map((_, index) => (
+                <div
+                  key={`enhance-empty-${index}`}
+                  style={{
+                    width: '36px',
+                    height: '36px',
+                    background: 'rgba(19, 16, 37, 0.2)',
+                    border: '2.5px solid rgba(100, 100, 130, 0.15)',
+                    borderRadius: '8px',
+                    opacity: 0.6,
+                  }}
+                />
+              ))}
+            </div>
+          </div>
+        ) : storageTab === 'enchant' ? (
+          /* 附魔页签：与强化页签一致的网格布局，展示附魔书 */
+          <div
+            className="flex-1 overflow-y-auto p-1.5"
+            style={{
+              background: 'rgba(13, 11, 26, 0.4)',
+              borderRadius: '8px',
+              border: '1px solid rgba(176, 38, 255, 0.1)',
+            }}
+          >
+            <div
+              className="grid gap-1"
+              style={{
+                gridTemplateColumns: 'repeat(5, 36px)',
+                rowGap: '1px',
+                justifyContent: 'space-between',
+              }}
+            >
+              {ENCHANT_ITEM_ORDER.map(id => {
+                const def = ENCHANT_ITEMS[id];
+                const stack = enchantItemInventory.find(s => s.itemId === id);
+                const count = stack?.count ?? 0;
+                const rarityColor = RARITY_COLORS[def.rarity] || '#9A9A9A';
+                const statColor = ENCHANT_STAT_INFO[def.stat].color;
+                return (
+                  <div
+                    key={id}
+                    className="flex flex-col items-center justify-center relative cursor-pointer"
+                    style={{
+                      width: '36px',
+                      height: '36px',
+                      marginBottom: '1px',
+                      background: `radial-gradient(circle at 50% 40%, ${rarityColor}33 0%, ${rarityColor}11 55%, #15122A 100%)`,
+                      border: `2.5px solid ${rarityColor}`,
+                      borderRadius: '8px',
+                      opacity: count > 0 ? 1 : 0.4,
+                    }}
+                    title={`${def.name} ×${count}\n${def.description}`}
+                    onClick={() => count > 0 && setSelectedEnchantItem({ itemId: id, count })}
+                  >
+                    <EnchantItemIcon itemId={id} size={28} />
+                    {/* 左下角：属性首字标识 */}
+                    <span
+                      className="absolute bottom-0.5 left-0.5"
+                      style={{
+                        fontFamily: '"Rajdhani", "Orbitron", monospace',
+                        fontSize: '7px',
+                        color: statColor,
+                        fontWeight: 700,
+                        textShadow: '0 0 3px rgba(0,0,0,0.8)',
+                      }}
+                    >
+                      {ENCHANT_STAT_INFO[def.stat].label}
+                    </span>
+                    {/* 右下角：数量 */}
+                    {count > 0 && (
+                      <span
+                        className="absolute bottom-0.5 right-0.5"
+                        style={{
+                          fontFamily: '"Rajdhani", "Orbitron", monospace',
+                          fontSize: '7px',
+                          color: '#0D0B1A',
+                          backgroundColor: neonCyan,
+                          borderRadius: '3px',
+                          fontWeight: 700,
+                          padding: '0 3px',
+                        }}
+                      >
+                        {count}
+                      </span>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
         ) : (
-          /* 强化/附魔页签：暂未实现，预留占位 */
           <div
             className="flex-1 flex items-center justify-center"
             style={{
@@ -684,10 +866,10 @@ const EquipmentPanel: React.FC<EquipmentPanelProps> = ({ onTabChange, engineRef,
             <div className="flex justify-between items-start mb-2">
               <div className="flex items-center gap-2.5">
                 <div
-                  className="w-11 h-11 flex items-center justify-center relative flex-shrink-0"
-                  style={itemSlotStyle(selectedItem.equipment.rarity)}
+                  className="flex items-center justify-center relative flex-shrink-0"
+                  style={{ width: '36px', height: '36px', ...itemSlotStyle(selectedItem.equipment.rarity) }}
                 >
-                  <EquipmentIcon slot={selectedItem.equipment.slot} rarity={selectedItem.equipment.rarity} variant={selectedItem.equipment.iconVariant} size={32} />
+                  <EquipmentIcon slot={selectedItem.equipment.slot} rarity={selectedItem.equipment.rarity} variant={selectedItem.equipment.iconVariant} size={28} gemCount={selectedItem.equipment.socketedGems?.length || 0} enhanceLevel={selectedItem.equipment.enhanceLevel || 0} level={selectedItem.equipment.level} />
                 </div>
                 <div className="min-w-0">
                   <div
@@ -711,24 +893,48 @@ const EquipmentPanel: React.FC<EquipmentPanelProps> = ({ onTabChange, engineRef,
                   </div>
                 </div>
               </div>
-              <button
-                style={{
-                  background: 'rgba(255, 45, 85, 0.2)',
-                  border: '1px solid rgba(255, 45, 85, 0.4)',
-                  color: '#FF2D55',
-                  width: '20px',
-                  height: '20px',
-                  fontSize: '11px',
-                  fontWeight: 'bold',
-                  cursor: 'pointer',
-                  fontFamily: '"Rajdhani", "Orbitron", monospace',
-                  borderRadius: '5px',
-                  flexShrink: 0,
-                }}
-                onClick={handleClose}
-              >
-                ×
-              </button>
+              {/* 右上角：关闭按钮 + 售价 + 耐久度（售价与耐久度紧贴） */}
+              <div className="flex flex-col items-end gap-1 flex-shrink-0">
+                <button
+                  style={{
+                    background: 'rgba(255, 45, 85, 0.2)',
+                    border: '1px solid rgba(255, 45, 85, 0.4)',
+                    color: '#FF2D55',
+                    width: '20px',
+                    height: '20px',
+                    fontSize: '11px',
+                    fontWeight: 'bold',
+                    cursor: 'pointer',
+                    fontFamily: '"Rajdhani", "Orbitron", monospace',
+                    borderRadius: '5px',
+                  }}
+                  onClick={handleClose}
+                >
+                  ×
+                </button>
+                <div className="flex flex-col items-end" style={{ gap: '1px' }}>
+                  {selectedItem.source === 'storage' && (
+                    <div className="flex justify-between gap-2" style={{ minWidth: '80px' }}>
+                      <span style={{ ...neonText, fontSize: '7px', color: '#8B80A0' }}>售价</span>
+                      <span style={{ ...neonText, fontSize: '7px', color: '#FFD700', fontWeight: 700 }}>
+                        {raritySellMap[selectedItem.equipment.rarity]}金币
+                      </span>
+                    </div>
+                  )}
+                  <div className="flex justify-between gap-2" style={{ minWidth: '80px' }}>
+                    <span style={{ ...neonText, fontSize: '7px', color: '#8B80A0' }}>耐久度</span>
+                    <span
+                      style={{
+                        ...neonText,
+                        fontSize: '7px',
+                        color: selectedItem.equipment.durability > (selectedItem.equipment.maxDurability || 100) * 0.3 ? neonCyan : '#FF2D55',
+                      }}
+                    >
+                      {selectedItem.equipment.durability}/{selectedItem.equipment.maxDurability || 100}
+                    </span>
+                  </div>
+                </div>
+              </div>
             </div>
 
             {/* 主属性 + 词条：三列紧凑布局 */}
@@ -832,41 +1038,59 @@ const EquipmentPanel: React.FC<EquipmentPanelProps> = ({ onTabChange, engineRef,
               )}
             </div>
 
-            {/* 耐久度 */}
-            <div className="flex justify-between mt-2" style={{ borderTop: '1px solid rgba(176, 38, 255, 0.15)', paddingTop: '6px' }}>
-              <span style={{ ...neonText, fontSize: '7px', color: '#8B80A0' }}>耐久度</span>
-              <span
-                style={{
-                  ...neonText,
-                  fontSize: '7px',
-                  color: selectedItem.equipment.durability > (selectedItem.equipment.maxDurability || 100) * 0.3 ? neonCyan : '#FF2D55',
-                }}
-              >
-                {selectedItem.equipment.durability}/{selectedItem.equipment.maxDurability || 100}
-              </span>
-            </div>
-
-            {/* 宝石镶嵌进度 + 加成 */}
+            {/* 强化 / 宝石 / 附魔：3 panel 对齐，与上方属性行布局一致 */}
             {(() => {
               const gems = selectedItem.equipment.socketedGems || [];
               const cnt = gems.length;
               const stats = { attack: 0, health: 0, defense: 0, critRate: 0, resistance: 0 };
               for (const g of gems) stats[g.type] += g.value;
               const hasGem = cnt > 0;
+              const enhanceLevel = selectedItem.equipment.enhanceLevel || 0;
+              const enhanceBonus = getEnhanceAttackBonus(enhanceLevel);
+              const hasEnhance = enhanceLevel > 0;
+              const ench = selectedItem.equipment.enchantment;
               return (
-                <div className="flex justify-between mt-1" style={{ borderTop: '1px solid rgba(176, 38, 255, 0.15)', paddingTop: '4px' }}>
-                  <span style={{ ...neonText, fontSize: '7px', color: '#8B80A0' }}>
-                    宝石 <span style={{ color: cnt >= MAX_GEM_SOCKETS ? neonYellow : neonCyan, fontWeight: 700 }}>{cnt}/{MAX_GEM_SOCKETS}</span>
-                  </span>
-                  {hasGem && (
-                    <span style={{ ...neonText, fontSize: '7px', color: '#00FF9D' }}>
-                      {stats.attack > 0 && `攻+${stats.attack} `}
-                      {stats.health > 0 && `生+${stats.health} `}
-                      {stats.defense > 0 && `防+${stats.defense} `}
-                      {stats.critRate > 0 && `暴+${stats.critRate}% `}
-                      {stats.resistance > 0 && `抗+${stats.resistance}`}
-                    </span>
-                  )}
+                <div className="grid grid-cols-3 gap-x-2 mt-1" style={{ borderTop: '1px solid rgba(176, 38, 255, 0.15)', paddingTop: '4px' }}>
+                  {/* 强化 */}
+                  <div className="flex flex-col gap-0.5">
+                    <div className="flex justify-between min-w-0">
+                      <span style={{ ...neonText, fontSize: '7px', color: '#8B80A0' }}>强化</span>
+                      {hasEnhance && (
+                        <span style={{ ...neonText, fontSize: '7px', color: neonPink, marginLeft: '4px', flexShrink: 0 }}>
+                          攻击+{enhanceBonus}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                  {/* 宝石 */}
+                  <div className="flex flex-col gap-0.5">
+                    <div className="flex justify-between min-w-0">
+                      <span style={{ ...neonText, fontSize: '7px', color: '#8B80A0' }}>宝石</span>
+                      {hasGem && (
+                        <span style={{ ...neonText, fontSize: '7px', lineHeight: 1.2, marginLeft: '4px' }}>
+                          {stats.attack > 0 && <span style={{ color: neonPink }}>攻击+{stats.attack} </span>}
+                          {stats.health > 0 && <span style={{ color: '#FF2D55' }}>生命+{stats.health} </span>}
+                          {stats.defense > 0 && <span style={{ color: '#5BA3E0' }}>防御+{stats.defense} </span>}
+                          {stats.critRate > 0 && <span style={{ color: neonPurple }}>暴击率+{stats.critRate}% </span>}
+                          {stats.resistance > 0 && <span style={{ color: '#5BA3E0' }}>抗性+{stats.resistance}</span>}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                  {/* 附魔 */}
+                  <div className="flex flex-col gap-0.5">
+                    <div className="flex justify-between min-w-0">
+                      <span style={{ ...neonText, fontSize: '7px', color: '#8B80A0' }}>附魔</span>
+                      {ench && (
+                        <span style={{ ...neonText, fontSize: '7px', marginLeft: '4px' }}>
+                          <span style={{ color: ENCHANT_STAT_INFO[ench.stat].color }}>
+                            {ENCHANT_STAT_INFO[ench.stat].name}
+                          </span>
+                          <span style={{ color: '#FFFFFF' }}>+{ench.percent}%</span>
+                        </span>
+                      )}
+                    </div>
+                  </div>
                 </div>
               );
             })()}
@@ -874,6 +1098,42 @@ const EquipmentPanel: React.FC<EquipmentPanelProps> = ({ onTabChange, engineRef,
             {/* 操作按钮 */}
             <div className="mt-2 pt-2" style={{ borderTop: '1px solid rgba(176, 38, 255, 0.1)' }}>
               <div className="flex justify-between gap-1.5">
+                {selectedItem.source === 'storage' && (
+                  <button
+                    className="flex-1 px-2 py-1.5"
+                    style={{
+                      background: 'rgba(0, 245, 212, 0.15)',
+                      border: '1px solid rgba(0, 245, 212, 0.3)',
+                      borderRadius: '6px',
+                      fontFamily: '"Rajdhani", "Orbitron", monospace',
+                      fontSize: '8px',
+                      fontWeight: 600,
+                      color: neonCyan,
+                      boxShadow: '0 0 8px rgba(0, 245, 212, 0.1)',
+                      cursor: 'pointer',
+                    }}
+                    onClick={handleEquip}
+                  >
+                    装备
+                  </button>
+                )}
+                <button
+                  className="flex-1 px-2 py-1.5"
+                  style={{
+                    background: 'rgba(0, 255, 157, 0.15)',
+                    border: '1px solid rgba(0, 255, 157, 0.4)',
+                    borderRadius: '6px',
+                    fontFamily: '"Rajdhani", "Orbitron", monospace',
+                    fontSize: '8px',
+                    fontWeight: 600,
+                    color: '#00FF9D',
+                    boxShadow: '0 0 8px rgba(0, 255, 157, 0.15)',
+                    cursor: 'pointer',
+                  }}
+                  onClick={() => setShowEmbedModal(true)}
+                >
+                  镶嵌
+                </button>
                 <button
                   className="flex-1 px-2 py-1.5"
                   style={{
@@ -887,39 +1147,37 @@ const EquipmentPanel: React.FC<EquipmentPanelProps> = ({ onTabChange, engineRef,
                     boxShadow: '0 0 8px rgba(255, 215, 0, 0.1)',
                     cursor: 'pointer',
                   }}
-                  onClick={handleScrap}
+                  onClick={() => setShowEnhanceModal(true)}
                 >
-                  出售 ({raritySellMap[selectedItem.equipment.rarity]}金)
+                  强化
                 </button>
-                {selectedItem.source === 'storage' && (
-                  <button
-                    className="px-3 py-1.5"
-                    style={{
-                      background: 'rgba(0, 245, 212, 0.15)',
-                      border: '1px solid rgba(0, 245, 212, 0.3)',
-                      borderRadius: '6px',
-                      fontFamily: '"Rajdhani", "Orbitron", monospace',
-                      fontSize: '9px',
-                      fontWeight: 700,
-                      color: neonCyan,
-                      boxShadow: '0 0 8px rgba(0, 245, 212, 0.1)',
-                      cursor: 'pointer',
-                    }}
-                    onClick={handleEquip}
-                  >
-                    装备
-                  </button>
-                )}
+                <button
+                  className="flex-1 px-2 py-1.5"
+                  style={{
+                    background: 'rgba(176, 38, 255, 0.15)',
+                    border: '1px solid rgba(176, 38, 255, 0.3)',
+                    borderRadius: '6px',
+                    fontFamily: '"Rajdhani", "Orbitron", monospace',
+                    fontSize: '8px',
+                    fontWeight: 600,
+                    color: '#B026FF',
+                    boxShadow: '0 0 8px rgba(176, 38, 255, 0.1)',
+                    cursor: 'pointer',
+                  }}
+                  onClick={() => setShowEnchantModal(true)}
+                >
+                  附魔
+                </button>
                 {selectedItem.source === 'equipped' && (
                   <button
-                    className="px-3 py-1.5"
+                    className="flex-1 px-2 py-1.5"
                     style={{
                       background: 'rgba(255, 0, 128, 0.15)',
                       border: '1px solid rgba(255, 0, 128, 0.3)',
                       borderRadius: '6px',
                       fontFamily: '"Rajdhani", "Orbitron", monospace',
-                      fontSize: '9px',
-                      fontWeight: 700,
+                      fontSize: '8px',
+                      fontWeight: 600,
                       color: neonPink,
                       boxShadow: '0 0 8px rgba(255, 0, 128, 0.1)',
                       cursor: 'pointer',
@@ -929,23 +1187,25 @@ const EquipmentPanel: React.FC<EquipmentPanelProps> = ({ onTabChange, engineRef,
                     卸下
                   </button>
                 )}
-                <button
-                  className="px-3 py-1.5"
-                  style={{
-                    background: 'rgba(0, 255, 157, 0.15)',
-                    border: '1px solid rgba(0, 255, 157, 0.4)',
-                    borderRadius: '6px',
-                    fontFamily: '"Rajdhani", "Orbitron", monospace',
-                    fontSize: '9px',
-                    fontWeight: 700,
-                    color: '#00FF9D',
-                    boxShadow: '0 0 8px rgba(0, 255, 157, 0.15)',
-                    cursor: 'pointer',
-                  }}
-                  onClick={() => setShowEmbedModal(true)}
-                >
-                  镶嵌
-                </button>
+                {selectedItem.source === 'storage' && (
+                  <button
+                    className="flex-1 px-2 py-1.5"
+                    style={{
+                      background: 'rgba(255, 215, 0, 0.15)',
+                      border: '1px solid rgba(255, 215, 0, 0.3)',
+                      borderRadius: '6px',
+                      fontFamily: '"Rajdhani", "Orbitron", monospace',
+                      fontSize: '8px',
+                      fontWeight: 600,
+                      color: '#FFD700',
+                      boxShadow: '0 0 8px rgba(255, 215, 0, 0.1)',
+                      cursor: 'pointer',
+                    }}
+                    onClick={handleScrap}
+                  >
+                    出售
+                  </button>
+                )}
               </div>
               {selectedItem.source === 'storage' && player && player.level < selectedItem.equipment.level && (
                 <div className="text-right mt-2">
@@ -1080,6 +1340,26 @@ const EquipmentPanel: React.FC<EquipmentPanelProps> = ({ onTabChange, engineRef,
           equipmentId={selectedItem.equipment.id}
           source={selectedItem.source}
           onClose={() => setShowEmbedModal(false)}
+          engineRef={engineRef as GameEngineRef}
+        />
+      )}
+
+      {/* 装备强化弹窗 */}
+      {showEnhanceModal && selectedItem && (
+        <EnhanceModal
+          equipmentId={selectedItem.equipment.id}
+          source={selectedItem.source}
+          onClose={() => setShowEnhanceModal(false)}
+          engineRef={engineRef as GameEngineRef}
+        />
+      )}
+
+      {/* 装备附魔弹窗 */}
+      {showEnchantModal && selectedItem && (
+        <EnchantModal
+          equipmentId={selectedItem.equipment.id}
+          source={selectedItem.source}
+          onClose={() => setShowEnchantModal(false)}
           engineRef={engineRef as GameEngineRef}
         />
       )}
@@ -1226,6 +1506,291 @@ const EquipmentPanel: React.FC<EquipmentPanelProps> = ({ onTabChange, engineRef,
                       (engineRef.current as any).syncGemInventory?.(next);
                     }
                     setSelectedGem(null);
+                  }}
+                >
+                  丢弃
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* 强化道具详情弹窗（与宝石详情弹窗结构一致） */}
+      {selectedEnhanceItem && (() => {
+        const def = getEnhanceItemDef(selectedEnhanceItem.itemId);
+        if (!def) return null;
+        const rarityColor = RARITY_COLORS[def.rarity] || '#9A9A9A';
+        const rarityLabel = RARITY_LABELS[def.rarity] || '普通';
+        return (
+          <div
+            className="absolute inset-0 flex items-center justify-center z-20"
+            style={{ background: 'rgba(0, 0, 0, 0.7)', backdropFilter: 'blur(4px)' }}
+            onClick={() => setSelectedEnhanceItem(null)}
+          >
+            <div
+              className="relative w-64 p-4"
+              style={{
+                background: 'rgba(19, 16, 37, 0.8)',
+                backdropFilter: 'blur(12px)',
+                border: '1px solid rgba(176, 38, 255, 0.25)',
+                borderRadius: '12px',
+                boxShadow: '0 0 20px rgba(176, 38, 255, 0.1), inset 0 1px 0 rgba(255,255,255,0.05)',
+                padding: '16px 18px',
+              }}
+              onClick={(e) => e.stopPropagation()}
+            >
+              <button
+                className="absolute top-2.5 right-2.5 w-6 h-6 flex items-center justify-center"
+                style={{
+                  background: 'rgba(255, 45, 85, 0.2)',
+                  border: '1px solid rgba(255, 45, 85, 0.4)',
+                  borderRadius: '6px',
+                  fontFamily: '"Rajdhani", "Orbitron", monospace',
+                  fontSize: '11px',
+                  fontWeight: 'bold',
+                  color: '#FF2D55',
+                  cursor: 'pointer',
+                }}
+                onClick={() => setSelectedEnhanceItem(null)}
+              >
+                X
+              </button>
+
+              {/* 图标 + 名称 + 品质/数量 */}
+              <div className="flex items-center gap-3 mb-3 pr-8">
+                <div
+                  className="w-12 h-12 flex items-center justify-center relative"
+                  style={{
+                    background: `radial-gradient(circle at 50% 40%, ${rarityColor}33 0%, ${rarityColor}11 55%, #15122A 100%)`,
+                    border: `2.5px solid ${rarityColor}`,
+                    borderRadius: '8px',
+                  }}
+                >
+                  <EnhanceItemIcon itemId={def.id} size={32} />
+                </div>
+                <div>
+                  <div
+                    style={{
+                      fontFamily: '"Rajdhani", "Orbitron", monospace',
+                      fontSize: '11px',
+                      fontWeight: 700,
+                      color: rarityColor,
+                      textShadow: `0 0 6px ${rarityColor}60`,
+                    }}
+                  >
+                    {def.name}
+                  </div>
+                  <div
+                    className="mt-1"
+                    style={{ fontFamily: '"Rajdhani", "Orbitron", monospace', fontSize: '8px', color: '#8B80A0' }}
+                  >
+                    {rarityLabel} · 数量 {selectedEnhanceItem.count}
+                  </div>
+                </div>
+              </div>
+
+              {/* 描述 */}
+              <div
+                className="pt-2 mb-3"
+                style={{ borderTop: '1px solid rgba(176, 38, 255, 0.15)' }}
+              >
+                <p
+                  style={{
+                    fontFamily: '"Rajdhani", "Orbitron", monospace',
+                    fontSize: '8px',
+                    color: '#B0A8C8',
+                    lineHeight: '1.5',
+                  }}
+                >
+                  {def.description}
+                </p>
+                <p
+                  className="mt-1"
+                  style={{
+                    fontFamily: '"Rajdhani", "Orbitron", monospace',
+                    fontSize: '7.5px',
+                    color: neonYellow,
+                    lineHeight: '1.5',
+                  }}
+                >
+                  类型：{def.mode === 'scroll' ? '强化卷轴' : '强化器'} · 可在装备强化界面使用
+                </p>
+              </div>
+
+              {/* 操作按钮：丢弃 */}
+              <div className="flex gap-2 justify-end flex-wrap">
+                <button
+                  className="px-4 py-1.5"
+                  style={{
+                    background: 'rgba(255, 45, 85, 0.15)',
+                    border: '1px solid rgba(255, 45, 85, 0.3)',
+                    borderRadius: '6px',
+                    fontFamily: '"Rajdhani", "Orbitron", monospace',
+                    fontSize: '9px',
+                    fontWeight: 700,
+                    color: '#FF2D55',
+                    boxShadow: '0 0 8px rgba(255, 45, 85, 0.1)',
+                    cursor: 'pointer',
+                  }}
+                  onClick={() => {
+                    // 丢弃：从强化道具背包中扣除 1 个
+                    const next = enhanceItemInventory
+                      .map(s => s.itemId === selectedEnhanceItem.itemId ? { ...s, count: s.count - 1 } : s)
+                      .filter(s => s.count > 0);
+                    useGameStore.setState({ enhanceItemInventory: next });
+                    if (engineRef?.current) {
+                      (engineRef.current as any).syncEnhanceItemInventory?.(next);
+                    }
+                    setSelectedEnhanceItem(null);
+                  }}
+                >
+                  丢弃
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* 附魔书详情弹窗（与强化道具详情弹窗结构一致） */}
+      {selectedEnchantItem && (() => {
+        const def = getEnchantItemDef(selectedEnchantItem.itemId);
+        if (!def) return null;
+        const rarityColor = RARITY_COLORS[def.rarity] || '#9A9A9A';
+        const rarityLabel = RARITY_LABELS[def.rarity] || '普通';
+        const statName = ENCHANT_STAT_INFO[def.stat].name;
+        const statColor = ENCHANT_STAT_INFO[def.stat].color;
+        return (
+          <div
+            className="absolute inset-0 flex items-center justify-center z-20"
+            style={{ background: 'rgba(0, 0, 0, 0.7)', backdropFilter: 'blur(4px)' }}
+            onClick={() => setSelectedEnchantItem(null)}
+          >
+            <div
+              className="relative w-64 p-4"
+              style={{
+                background: 'rgba(19, 16, 37, 0.8)',
+                backdropFilter: 'blur(12px)',
+                border: '1px solid rgba(176, 38, 255, 0.25)',
+                borderRadius: '12px',
+                boxShadow: '0 0 20px rgba(176, 38, 255, 0.1), inset 0 1px 0 rgba(255,255,255,0.05)',
+                padding: '16px 18px',
+              }}
+              onClick={(e) => e.stopPropagation()}
+            >
+              <button
+                className="absolute top-2.5 right-2.5 w-6 h-6 flex items-center justify-center"
+                style={{
+                  background: 'rgba(255, 45, 85, 0.2)',
+                  border: '1px solid rgba(255, 45, 85, 0.4)',
+                  borderRadius: '6px',
+                  fontFamily: '"Rajdhani", "Orbitron", monospace',
+                  fontSize: '11px',
+                  fontWeight: 'bold',
+                  color: '#FF2D55',
+                  cursor: 'pointer',
+                }}
+                onClick={() => setSelectedEnchantItem(null)}
+              >
+                X
+              </button>
+
+              {/* 图标 + 名称 + 品质/数量 */}
+              <div className="flex items-center gap-3 mb-3 pr-8">
+                <div
+                  className="w-12 h-12 flex items-center justify-center relative"
+                  style={{
+                    background: `radial-gradient(circle at 50% 40%, ${rarityColor}33 0%, ${rarityColor}11 55%, #15122A 100%)`,
+                    border: `2.5px solid ${rarityColor}`,
+                    borderRadius: '8px',
+                  }}
+                >
+                  <EnchantItemIcon itemId={def.id} size={32} />
+                </div>
+                <div>
+                  <div
+                    style={{
+                      fontFamily: '"Rajdhani", "Orbitron", monospace',
+                      fontSize: '11px',
+                      fontWeight: 700,
+                      color: rarityColor,
+                      textShadow: `0 0 6px ${rarityColor}60`,
+                    }}
+                  >
+                    {def.name}
+                  </div>
+                  <div
+                    className="mt-1"
+                    style={{ fontFamily: '"Rajdhani", "Orbitron", monospace', fontSize: '8px', color: '#8B80A0' }}
+                  >
+                    {rarityLabel} · 数量 {selectedEnchantItem.count}
+                  </div>
+                </div>
+              </div>
+
+              {/* 属性加成 */}
+              <div
+                className="pt-2 mb-3"
+                style={{ borderTop: '1px solid rgba(176, 38, 255, 0.15)' }}
+              >
+                <div className="flex justify-between items-center">
+                  <span style={{ fontFamily: '"Rajdhani", "Orbitron", monospace', fontSize: '8px', color: statColor, fontWeight: 700 }}>
+                    {statName}
+                  </span>
+                  <span style={{ fontFamily: '"Rajdhani", "Orbitron", monospace', fontSize: '9px', color: '#FFFFFF', fontWeight: 700 }}>
+                    +{def.percent}%
+                  </span>
+                </div>
+                <p
+                  className="mt-2"
+                  style={{
+                    fontFamily: '"Rajdhani", "Orbitron", monospace',
+                    fontSize: '7.5px',
+                    color: '#B0A8C8',
+                    lineHeight: '1.5',
+                  }}
+                >
+                  {def.description}
+                </p>
+                <p
+                  className="mt-1"
+                  style={{
+                    fontFamily: '"Rajdhani", "Orbitron", monospace',
+                    fontSize: '7.5px',
+                    color: neonYellow,
+                    lineHeight: '1.5',
+                  }}
+                >
+                  可在装备附魔界面使用 · 2 本可合成 1 本高一级品质
+                </p>
+              </div>
+
+              {/* 操作按钮：丢弃 */}
+              <div className="flex gap-2 justify-end flex-wrap">
+                <button
+                  className="px-4 py-1.5"
+                  style={{
+                    background: 'rgba(255, 45, 85, 0.15)',
+                    border: '1px solid rgba(255, 45, 85, 0.3)',
+                    borderRadius: '6px',
+                    fontFamily: '"Rajdhani", "Orbitron", monospace',
+                    fontSize: '9px',
+                    fontWeight: 700,
+                    color: '#FF2D55',
+                    boxShadow: '0 0 8px rgba(255, 45, 85, 0.1)',
+                    cursor: 'pointer',
+                  }}
+                  onClick={() => {
+                    // 丢弃：从附魔书背包中扣除 1 本
+                    const next = enchantItemInventory
+                      .map(s => s.itemId === selectedEnchantItem.itemId ? { ...s, count: s.count - 1 } : s)
+                      .filter(s => s.count > 0);
+                    useGameStore.setState({ enchantItemInventory: next });
+                    if (engineRef?.current) {
+                      (engineRef.current as any).syncEnchantItemInventory?.(next);
+                    }
+                    setSelectedEnchantItem(null);
                   }}
                 >
                   丢弃

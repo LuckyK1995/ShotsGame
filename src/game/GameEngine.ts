@@ -44,6 +44,24 @@ import {
 import { ENEMY_CONFIGS, NORMAL_ENEMY_TYPES, ELITE_ENEMY_TYPES, BOSS_ENEMY_TYPES } from './data/enemies';
 import { WEAPONS, ARMORS, ITEMS, SKILLS, INITIAL_EQUIPMENT, createEquipment, getQualitySetGroups, getItemDef, SLOT_LABELS, RARITY_LABELS } from './data/equipment';
 import { getGemDef, MAX_GEM_SOCKETS, getSocketSuccessRate, isFailResetToZero, randomGemId } from './data/gems';
+import {
+  ENHANCE_ITEMS,
+  getEnhanceSuccessRate,
+  getEnhanceFailResult,
+  getEnhanceGoldCost,
+  getEnhanceAttackBonus,
+  MAX_ENHANCE_LEVEL,
+} from './data/enhanceItems';
+import type { EnhanceItemId } from './data/enhanceItems';
+import {
+  ENCHANT_ITEMS,
+  ENCHANT_ITEM_ORDER,
+  getEnchantItemDef,
+  getUpgradeEnchantId,
+  ENCHANT_SYNTH_COST,
+  INITIAL_ENCHANT_INVENTORY,
+} from './data/enchantItems';
+import type { EnchantItemId, EnchantStat } from './data/enchantItems';
 
 export class GameEngine {
   canvas: HTMLCanvasElement;
@@ -64,6 +82,10 @@ export class GameEngine {
   inventory: ItemStack[];
   // 宝石背包：与 inventory 平行存储
   gemInventory: ItemStack[];
+  // 强化道具背包
+  enhanceItemInventory: ItemStack[];
+  // 附魔书背包
+  enchantItemInventory: ItemStack[];
   skills: Skill[];
 
   private animationId: number | null = null;
@@ -76,6 +98,8 @@ export class GameEngine {
   onBossDefeat?: () => void;
   onInventoryChange?: (inventory: ItemStack[]) => void;
   onGemInventoryChange?: (gems: ItemStack[]) => void;
+  onEnhanceItemInventoryChange?: (items: ItemStack[]) => void;
+  onEnchantItemInventoryChange?: (items: ItemStack[]) => void;
   onSkillsChange?: (skills: Skill[]) => void;
   onEquipmentChange?: (equipment: Equipment[]) => void;
   onEquipmentStorageChange?: (storage: Equipment[]) => void;
@@ -336,6 +360,15 @@ export class GameEngine {
       { itemId: 'gem_resistance_common', count: 99 },
       { itemId: 'gem_resistance_advanced', count: 99 },
     ];
+    // 初始强化道具背包：每种 99 个，便于测试
+    this.enhanceItemInventory = [
+      { itemId: 'enhance_scroll_plus1', count: 99 },
+      { itemId: 'enhance_scroll_plus2', count: 99 },
+      { itemId: 'enhance_normal_booster', count: 99 },
+      { itemId: 'enhance_ancient_booster', count: 99 },
+    ];
+    // 初始附魔书背包：普通、高级、精致品质各属性 50 本
+    this.enchantItemInventory = INITIAL_ENCHANT_INVENTORY.map(x => ({ ...x }));
     this.skills = SKILLS.map(s => ({ ...s, currentCooldown: 0 }));
     this.activeSkills = this.initActiveSkills();
 
@@ -952,6 +985,10 @@ expToNextLevel: Math.floor(10 + Math.pow(bs.level, 1.7) * 4 + bs.level * 4),
       if (equip.critDamage) critDamage += equip.critDamage;
       if (equip.defense) defense += equip.defense;
       if (equip.pierce) physicalPenetration += equip.pierce;
+      // 强化加成：累加值，如 +3 = 1+2+3 = 6 点攻击力
+      if (equip.enhanceLevel && equip.enhanceLevel > 0) {
+        attack += getEnhanceAttackBonus(equip.enhanceLevel);
+      }
       // 装备主属性元素伤害需要属性攻击激活
       if (equip.elementalDamage && equip.element && activeElements.has(equip.element)) {
         elementalDamageBonus[equip.element] = (elementalDamageBonus[equip.element] || 0) + equip.elementalDamage;
@@ -1017,6 +1054,29 @@ expToNextLevel: Math.floor(10 + Math.pow(bs.level, 1.7) * 4 + bs.level * 4),
         }
       }
     }
+
+    // 附魔加成：百分比加成到对应属性（在所有装备主属性 + 词条累加完毕后应用）
+    let enchantAttackPct = 0;
+    let enchantHealthPct = 0;
+    let enchantDefensePct = 0;
+    let enchantCritRateFlat = 0;
+    let enchantResistanceFlat = 0;
+    for (const equip of this.equipment) {
+      if (equip.enchantment) {
+        switch (equip.enchantment.stat) {
+          case 'attack': enchantAttackPct += equip.enchantment.percent; break;
+          case 'health': enchantHealthPct += equip.enchantment.percent; break;
+          case 'defense': enchantDefensePct += equip.enchantment.percent; break;
+          case 'critRate': enchantCritRateFlat += equip.enchantment.percent; break;
+          case 'resistance': enchantResistanceFlat += equip.enchantment.percent; break;
+        }
+      }
+    }
+    if (enchantAttackPct > 0) attack = Math.floor(attack * (1 + enchantAttackPct / 100));
+    if (enchantHealthPct > 0) maxHealth = Math.floor(maxHealth * (1 + enchantHealthPct / 100));
+    if (enchantDefensePct > 0) defense = Math.floor(defense * (1 + enchantDefensePct / 100));
+    critRate += enchantCritRateFlat;
+    resistance += enchantResistanceFlat;
 
     // 品质套装加成（3/6/9 件套）
     const setGroups = getQualitySetGroups(this.equipment);
@@ -1823,7 +1883,7 @@ expToNextLevel: Math.floor(10 + Math.pow(bs.level, 1.7) * 4 + bs.level * 4),
     if (count >= 1) {
       positions.push({
         x: centerX + 20,
-        y: centerY - 95,
+        y: centerY - 100,
       });
     }
     if (count >= 2) {
@@ -4516,6 +4576,200 @@ expToNextLevel: Math.floor(10 + Math.pow(bs.level, 1.7) * 4 + bs.level * 4),
     if (this.onGemInventoryChange) this.onGemInventoryChange(this.gemInventory);
   }
 
+  // 同步强化道具背包到引擎
+  syncEnhanceItemInventory(items: ItemStack[]): void {
+    this.enhanceItemInventory = items;
+    if (this.onEnhanceItemInventoryChange) this.onEnhanceItemInventoryChange(this.enhanceItemInventory);
+  }
+
+  // 装备强化：返回结果供前端展示
+  enhanceEquipment(
+    equipmentId: string,
+    source: 'equipped' | 'storage',
+    mode: 'gold' | 'item',
+    itemId?: string
+  ): { success: boolean; reason?: string; newLevel: number; goldCost: number; failResult?: string } | null {
+    // 找到装备
+    const list = source === 'equipped' ? this.equipment : this.equipmentStorage;
+    const eq = list.find(e => e.id === equipmentId);
+    if (!eq) return null;
+    const currentLevel = eq.enhanceLevel || 0;
+    if (currentLevel >= MAX_ENHANCE_LEVEL) {
+      return { success: false, reason: '已达最高强化等级', newLevel: currentLevel, goldCost: 0 };
+    }
+
+    let successBonus = 0;
+    let goldCost = 0;
+
+    if (mode === 'gold') {
+      // 金币消耗
+      goldCost = getEnhanceGoldCost(eq.level, eq.rarity, currentLevel);
+      if (this.player.gold < goldCost) {
+        return { success: false, reason: '金币不足', newLevel: currentLevel, goldCost };
+      }
+    } else {
+      // 道具模式
+      if (!itemId) return null;
+      const def = ENHANCE_ITEMS[itemId as EnhanceItemId];
+      if (!def) return null;
+      // 检查库存
+      const stack = this.enhanceItemInventory.find(s => s.itemId === itemId);
+      if (!stack || stack.count <= 0) {
+        return { success: false, reason: '道具不足', newLevel: currentLevel, goldCost: 0 };
+      }
+      // 卷轴模式：直接 +N，必须满足等级限制
+      if (def.mode === 'scroll') {
+        const limit = def.maxLevel || 99;
+        if (currentLevel >= limit) {
+          return { success: false, reason: `限${limit}以下使用`, newLevel: currentLevel, goldCost: 0 };
+        }
+        // 直接消耗道具并提升等级
+        this.enhanceItemInventory = this.enhanceItemInventory
+          .map(s => s.itemId === itemId ? { ...s, count: s.count - 1 } : s)
+          .filter(s => s.count > 0);
+        if (this.onEnhanceItemInventoryChange) this.onEnhanceItemInventoryChange(this.enhanceItemInventory);
+        const newLevel = Math.min(currentLevel + (def.plusAmount || 1), MAX_ENHANCE_LEVEL);
+        eq.enhanceLevel = newLevel;
+        this.syncEquipmentState(this.equipment, this.equipmentStorage);
+        return { success: true, newLevel, goldCost: 0 };
+      }
+      // 强化器模式：免费强化一次
+      if (def.successBonus) successBonus = def.successBonus;
+      // 消耗道具
+      this.enhanceItemInventory = this.enhanceItemInventory
+        .map(s => s.itemId === itemId ? { ...s, count: s.count - 1 } : s)
+        .filter(s => s.count > 0);
+      if (this.onEnhanceItemInventoryChange) this.onEnhanceItemInventoryChange(this.enhanceItemInventory);
+    }
+
+    // 金币或强化器：走正常强化流程
+    if (mode === 'gold') {
+      this.player.gold -= goldCost;
+      if (this.onPlayerChange) this.onPlayerChange(this.player);
+    }
+
+    const baseRate = getEnhanceSuccessRate(currentLevel);
+    const actualRate = Math.min(1, baseRate + successBonus);
+    const isSuccess = Math.random() < actualRate;
+    const failResultType = getEnhanceFailResult(currentLevel);
+
+    let newLevel = currentLevel;
+    let failResultStr: string | undefined;
+    if (isSuccess) {
+      newLevel = currentLevel + 1;
+      eq.enhanceLevel = newLevel;
+    } else {
+      switch (failResultType) {
+        case 'none':
+          failResultStr = '无';
+          break;
+        case 'keep':
+          failResultStr = '保留等级';
+          break;
+        case 'minus2':
+          newLevel = Math.max(0, currentLevel - 2);
+          eq.enhanceLevel = newLevel;
+          failResultStr = '等级-2';
+          break;
+        case 'minus1':
+          newLevel = Math.max(0, currentLevel - 1);
+          eq.enhanceLevel = newLevel;
+          failResultStr = '等级-1';
+          break;
+      }
+    }
+    this.syncEquipmentState(this.equipment, this.equipmentStorage);
+    return { success: isSuccess, newLevel, goldCost, failResult: failResultStr };
+  }
+
+  syncEnchantItemInventory(items: ItemStack[]): void {
+    this.enchantItemInventory = items;
+    if (this.onEnchantItemInventoryChange) this.onEnchantItemInventoryChange(this.enchantItemInventory);
+  }
+
+  // 装备附魔：消耗 1 本附魔书，给装备附加或覆盖附魔效果
+  enchantEquipment(
+    equipmentId: string,
+    source: 'equipped' | 'storage',
+    itemId: string
+  ): { success: boolean; reason?: string; stat?: EnchantStat; percent?: number } | null {
+    const list = source === 'equipped' ? this.equipment : this.equipmentStorage;
+    const eq = list.find(e => e.id === equipmentId);
+    if (!eq) return null;
+
+    const def = getEnchantItemDef(itemId);
+    if (!def) return { success: false, reason: '无效的附魔书', stat: undefined, percent: undefined };
+
+    // 检查库存
+    const stack = this.enchantItemInventory.find(s => s.itemId === itemId);
+    if (!stack || stack.count <= 0) {
+      return { success: false, reason: '附魔书不足', stat: def.stat, percent: def.percent };
+    }
+
+    // 消耗 1 本附魔书
+    this.enchantItemInventory = this.enchantItemInventory
+      .map(s => s.itemId === itemId ? { ...s, count: s.count - 1 } : s)
+      .filter(s => s.count > 0);
+    if (this.onEnchantItemInventoryChange) this.onEnchantItemInventoryChange(this.enchantItemInventory);
+
+    // 应用附魔（覆盖原有附魔）
+    eq.enchantment = { stat: def.stat, rarity: def.rarity, percent: def.percent };
+    this.syncEquipmentState(this.equipment, this.equipmentStorage);
+    return { success: true, stat: def.stat, percent: def.percent };
+  }
+
+  // 合成附魔书：消耗 ENCHANT_SYNTH_COST 本相同 ID 的书，获得 1 本高一级品质的书
+  synthEnchantItem(
+    itemId: string
+  ): { success: boolean; reason?: string; newItemId?: string } | null {
+    const def = getEnchantItemDef(itemId);
+    if (!def) return { success: false, reason: '无效的附魔书' };
+
+    const upgradeId = getUpgradeEnchantId(def.id);
+    if (!upgradeId) {
+      return { success: false, reason: '已达最高品质，无法合成' };
+    }
+
+    // 检查库存
+    const stack = this.enchantItemInventory.find(s => s.itemId === itemId);
+    if (!stack || stack.count < ENCHANT_SYNTH_COST) {
+      return { success: false, reason: `需要 ${ENCHANT_SYNTH_COST} 本相同品质的附魔书` };
+    }
+
+    // 消耗 ENCHANT_SYNTH_COST 本
+    this.enchantItemInventory = this.enchantItemInventory
+      .map(s => s.itemId === itemId ? { ...s, count: s.count - ENCHANT_SYNTH_COST } : s)
+      .filter(s => s.count > 0);
+
+    // 增加 1 本升级后的书
+    const existing = this.enchantItemInventory.find(s => s.itemId === upgradeId);
+    if (existing) {
+      this.enchantItemInventory = this.enchantItemInventory
+        .map(s => s.itemId === upgradeId ? { ...s, count: s.count + 1 } : s);
+    } else {
+      this.enchantItemInventory = [...this.enchantItemInventory, { itemId: upgradeId, count: 1 }];
+    }
+
+    if (this.onEnchantItemInventoryChange) this.onEnchantItemInventoryChange(this.enchantItemInventory);
+    return { success: true, newItemId: upgradeId };
+  }
+
+  // 修理所有装备：恢复耐久度到最大值
+  repairAllEquipment(): void {
+    for (const eq of this.equipment) {
+      if (eq.durability !== undefined && eq.maxDurability) {
+        eq.durability = eq.maxDurability;
+      }
+    }
+    for (const eq of this.equipmentStorage) {
+      if (eq.durability !== undefined && eq.maxDurability) {
+        eq.durability = eq.maxDurability;
+      }
+    }
+    if (this.onEquipmentChange) this.onEquipmentChange(this.equipment);
+    if (this.onEquipmentStorageChange) this.onEquipmentStorageChange(this.equipmentStorage);
+  }
+
   // 宝石镶嵌：根据已镶嵌数量计算成功率与失败后果
   // 第1颗 100% 成功；第2-7颗 50% 成功，失败不归零；第8-15颗 50% 成功，失败全部碎裂
   socketGem(equipmentId: string, gemId: string, source: 'equipped' | 'storage'): {
@@ -4880,8 +5134,25 @@ expToNextLevel: Math.floor(10 + Math.pow(bs.level, 1.7) * 4 + bs.level * 4),
         this.inventory = saveData.inventory;
       }
       if (saveData.gemInventory) {
-        this.gemInventory = saveData.gemInventory;
+        // 调试模式：宝石始终重置为每种99颗
+        const gemIds = [
+          'gem_attack_common', 'gem_attack_advanced',
+          'gem_health_common', 'gem_health_advanced',
+          'gem_defense_common', 'gem_defense_advanced',
+          'gem_critRate_common', 'gem_critRate_advanced',
+          'gem_resistance_common', 'gem_resistance_advanced',
+        ];
+        this.gemInventory = gemIds.map(id => ({ itemId: id, count: 99 }));
       }
+      // 调试模式：强化道具也始终重置为每种 99 个
+      this.enhanceItemInventory = [
+        { itemId: 'enhance_scroll_plus1', count: 99 },
+        { itemId: 'enhance_scroll_plus2', count: 99 },
+        { itemId: 'enhance_normal_booster', count: 99 },
+        { itemId: 'enhance_ancient_booster', count: 99 },
+      ];
+      // 调试模式：附魔书也始终重置为初始库存
+      this.enchantItemInventory = INITIAL_ENCHANT_INVENTORY.map(x => ({ ...x }));
       if (saveData.skills) {
         for (const savedSkill of saveData.skills) {
           const skill = this.skills.find(s => s.id === savedSkill.id);
@@ -5580,6 +5851,8 @@ expToNextLevel: Math.floor(10 + Math.pow(bs.level, 1.7) * 4 + bs.level * 4),
   }
 
   resize(width: number, height: number): void {
+    const oldPlayerY = this.player.y;
+
     this.canvas.width = width;
     this.canvas.height = height;
     this.config.canvasWidth = width;
@@ -5594,6 +5867,49 @@ expToNextLevel: Math.floor(10 + Math.pow(bs.level, 1.7) * 4 + bs.level * 4),
     this.initStars();
     this.initParallaxLayers();
     this.rebuildBackgroundCache();
+
+    // 修复 resize bug：屏幕高度变化（如浏览器全屏切换）时，
+    // 已存在的怪物 y 仍停留在旧战场范围，会挤出战场外；
+    // 子弹的 y 也仍停留在旧位置，与重定位后的人物产生错位。
+    // 处理：将活跃子弹按人物 y 偏移同步平移；将活跃怪物/掉落物 clamp 到新战场范围内。
+    const playerDeltaY = this.player.y - oldPlayerY;
+
+    // 子弹：同步平移 y 与抛物线 startY/targetY，保持与人物的相对位置
+    for (const bullet of this.bulletPool.getAll()) {
+      if (!bullet.active) continue;
+      bullet.y += playerDeltaY;
+      const b = bullet as any;
+      if (b.startY !== undefined) b.startY += playerDeltaY;
+      if (b.targetY !== undefined) b.targetY += playerDeltaY;
+    }
+
+    // 怪物：clamp 到新战场范围内（防止从上下两侧挤出）
+    const enemyTopLimit = arenaTop + 10;
+    const enemyBottomLimit = arenaBottom - 10;
+    for (const enemy of this.enemyPool.getAll()) {
+      if (!enemy.active) continue;
+      // 旧战场无效的怪（y 在新 arena 之外）按比例映射或直接 clamp
+      const maxY = enemyBottomLimit - enemy.height;
+      if (enemy.y < enemyTopLimit) enemy.y = enemyTopLimit;
+      else if (enemy.y > maxY) enemy.y = Math.max(enemyTopLimit, maxY);
+    }
+
+    // 掉落物：同样 clamp 到新战场范围
+    const dropBottomLimit = arenaBottom - 10;
+    for (const drop of this.dropPool.getAll()) {
+      if (!drop.active) continue;
+      const maxY = dropBottomLimit - drop.height;
+      if (drop.y < arenaTop + 10) drop.y = arenaTop + 10;
+      else if (drop.y > maxY) drop.y = Math.max(arenaTop + 10, maxY);
+    }
+
+    // 粒子和伤害数字：瞬时效果，resize 后位置已无意义，直接清理避免视觉残留
+    for (const p of this.particlePool.getAll()) {
+      if (p.active) this.particlePool.release(p);
+    }
+    for (const d of this.damageNumberPool.getAll()) {
+      if (d.active) this.damageNumberPool.release(d);
+    }
   }
 
   // 离屏 canvas 缓存静态背景

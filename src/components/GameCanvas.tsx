@@ -17,6 +17,8 @@ export const GameCanvas = forwardRef<GameCanvasHandle>((_, ref) => {
     setShowTalentSelection,
     setCodexEntries, setAchievements, setUnlockedAchievement,
     setGemInventory,
+    setEnhanceItemInventory,
+    setEnchantItemInventory,
     addRareDropNotification
   } = useGameStore();
 
@@ -55,6 +57,14 @@ export const GameCanvas = forwardRef<GameCanvasHandle>((_, ref) => {
 
     engine.onGemInventoryChange = (gems) => {
       setGemInventory([...gems]);
+    };
+
+    engine.onEnhanceItemInventoryChange = (items) => {
+      setEnhanceItemInventory([...items]);
+    };
+
+    engine.onEnchantItemInventoryChange = (items) => {
+      setEnchantItemInventory([...items]);
     };
 
     engine.onSkillsChange = (skills) => {
@@ -103,6 +113,8 @@ export const GameCanvas = forwardRef<GameCanvasHandle>((_, ref) => {
     setEquipment([...engine.equipment]);
     setEquipmentStorage([...engine.equipmentStorage]);
     setGemInventory([...engine.gemInventory]);
+    setEnhanceItemInventory([...engine.enhanceItemInventory]);
+    setEnchantItemInventory([...engine.enchantItemInventory]);
     setActiveSkills([...engine.getActiveSkills()]);
     setWeather({ ...engine.getWeather() });
     setCodexEntries([...engine.getCodexEntries()]);
@@ -153,6 +165,8 @@ export const GameCanvas = forwardRef<GameCanvasHandle>((_, ref) => {
       setShowTalentSelection,
       setCodexEntries, setAchievements, setUnlockedAchievement,
       setGemInventory,
+      setEnhanceItemInventory,
+      setEnchantItemInventory,
       addRareDropNotification]);
 
   return (

@@ -127,7 +127,7 @@ export function ShopPanel({ engineRef, isOpen, onClose }: ShopPanelProps) {
             className="w-10 h-10 flex items-center justify-center mb-1"
             style={itemSlotStyle(equip.rarity)}
           >
-            <EquipmentIcon slot={equip.slot} rarity={equip.rarity} variant={equip.iconVariant} size={28} />
+            <EquipmentIcon slot={equip.slot} rarity={equip.rarity} variant={equip.iconVariant} size={28} gemCount={equip.socketedGems?.length || 0} enhanceLevel={equip.enhanceLevel || 0} level={equip.level} />
           </div>
           <span
             style={{

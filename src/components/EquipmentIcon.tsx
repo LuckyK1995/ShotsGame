@@ -6,6 +6,9 @@ interface EquipmentIconProps {
   rarity: EquipRarity;
   variant: number;
   size?: number;
+  gemCount?: number;
+  enhanceLevel?: number;
+  level?: number;
 }
 
 const RARITY_TINTS: Record<EquipRarity, string> = {
@@ -2339,7 +2342,7 @@ function NecklaceIcon({ variant, tint }: { variant: number; tint: string }) {
   return patterns[variant % 5];
 }
 
-const EquipmentIconBase = React.memo(function EquipmentIcon({ slot, rarity, variant, size = 32 }: EquipmentIconProps) {
+const EquipmentIconBase = React.memo(function EquipmentIcon({ slot, rarity, variant, size = 32, gemCount = 0, enhanceLevel = 0, level = 0 }: EquipmentIconProps) {
   const tint = RARITY_TINTS[rarity];
   const glowColor = RARITY_GLOW[rarity];
   const isHighTier = rarity === 'legendary' || rarity === 'epic' || rarity === 'mythic';
@@ -2361,7 +2364,7 @@ const EquipmentIconBase = React.memo(function EquipmentIcon({ slot, rarity, vari
     }
   }, [slot, variant, tint]);
 
-  // 缓存装饰元素（高阶发光角点 + mythic 星星）
+  // 缓存装饰元素（高阶发光角点 + mythic 星星，星星根据宝石镶嵌数点亮）
   const decoration = React.useMemo(() => {
     if (!isHighTier && !isMythic) return null;
     const star = (cx: number, cy: number, rx: number, ry: number) => {
@@ -2369,8 +2372,12 @@ const EquipmentIconBase = React.memo(function EquipmentIcon({ slot, rarity, vari
       const qy = ry * 0.28;
       return `M${cx},${cy - ry} L${cx + qx},${cy - qy} L${cx + rx},${cy} L${cx + qx},${cy + qy} L${cx},${cy + ry} L${cx - qx},${cy + qy} L${cx - rx},${cy} L${cx - qx},${cy - qy} Z`;
     };
-    return (
-      <>
+    // 星星对所有品质装备显示
+  const showStar1 = gemCount >= 5;
+  const showStar2 = gemCount >= 10;
+  const showStar3 = gemCount >= 15;
+  return (
+    <>
         {isHighTier && (
           <>
             <rect x={0} y={0} width={1} height={1} fill={glowColor} opacity={0.9} />
@@ -2379,7 +2386,8 @@ const EquipmentIconBase = React.memo(function EquipmentIcon({ slot, rarity, vari
             <rect x={15} y={15} width={1} height={1} fill={glowColor} opacity={0.9} />
           </>
         )}
-        {isMythic && (
+        {/* 星星：所有品质装备，根据宝石镶嵌数点亮 */}
+        {gemCount > 0 && (
           <>
             <defs>
               <radialGradient id="mythic-star-grad" cx="50%" cy="50%" r="50%">
@@ -2394,23 +2402,35 @@ const EquipmentIconBase = React.memo(function EquipmentIcon({ slot, rarity, vari
                 <stop offset="100%" stopColor="#5A9CE8" stopOpacity="0" />
               </radialGradient>
             </defs>
-            {/* 左上角星星 */}
-            <circle cx={3} cy={4} r={3.2} fill="url(#mythic-star-glow)" className="mythic-star-glow mythic-star-glow-1" />
-            <path d={star(3, 4, 2.2, 4.2)} fill="rgba(90, 156, 232, 0.3)" />
-            <path d={star(3, 4, 1.3, 2.8)} fill="url(#mythic-star-grad)" className="mythic-star mythic-star-1" />
-            {/* 左下角星星 */}
-            <circle cx={6} cy={14} r={2.6} fill="url(#mythic-star-glow)" className="mythic-star-glow mythic-star-glow-2" />
-            <path d={star(6, 14, 3.0, 3.0)} fill="rgba(90, 156, 232, 0.3)" />
-            <path d={star(6, 14, 1.9, 1.9)} fill="url(#mythic-star-grad)" className="mythic-star mythic-star-2" />
-            {/* 右侧星星 */}
-            <circle cx={14} cy={8} r={3.5} fill="url(#mythic-star-glow)" className="mythic-star-glow mythic-star-glow-3" />
-            <path d={star(14, 8, 4.0, 4.0)} fill="rgba(90, 156, 232, 0.3)" />
-            <path d={star(14, 8, 2.6, 2.6)} fill="url(#mythic-star-grad)" className="mythic-star mythic-star-3" />
+            {/* 左上角星星 - 5颗宝石点亮 */}
+            {showStar1 && (
+              <>
+                <circle cx={3} cy={4} r={3.2} fill="url(#mythic-star-glow)" className="mythic-star-glow mythic-star-glow-1" />
+                <path d={star(3, 4, 2.2, 4.2)} fill="rgba(90, 156, 232, 0.3)" />
+                <path d={star(3, 4, 1.3, 2.8)} fill="url(#mythic-star-grad)" className="mythic-star mythic-star-1" />
+              </>
+            )}
+            {/* 左下角星星 - 10颗宝石点亮 */}
+            {showStar2 && (
+              <>
+                <circle cx={6} cy={14} r={2.6} fill="url(#mythic-star-glow)" className="mythic-star-glow mythic-star-glow-2" />
+                <path d={star(6, 14, 3.0, 3.0)} fill="rgba(90, 156, 232, 0.3)" />
+                <path d={star(6, 14, 1.9, 1.9)} fill="url(#mythic-star-grad)" className="mythic-star mythic-star-2" />
+              </>
+            )}
+            {/* 右侧星星 - 15颗宝石点亮 */}
+            {showStar3 && (
+              <>
+                <circle cx={14} cy={8} r={3.5} fill="url(#mythic-star-glow)" className="mythic-star-glow mythic-star-glow-3" />
+                <path d={star(14, 8, 4.0, 4.0)} fill="rgba(90, 156, 232, 0.3)" />
+                <path d={star(14, 8, 2.6, 2.6)} fill="url(#mythic-star-grad)" className="mythic-star mythic-star-3" />
+              </>
+            )}
           </>
         )}
       </>
     );
-  }, [isHighTier, isMythic, glowColor]);
+  }, [isHighTier, glowColor, gemCount, level]);
 
   return (
     <svg
@@ -2426,6 +2446,26 @@ const EquipmentIconBase = React.memo(function EquipmentIcon({ slot, rarity, vari
     >
       {iconContent}
       {decoration}
+      {/* 左下角：装备等级 */}
+      {level > 0 && (
+        <text x={1} y={15} textAnchor="start" fontSize={4} fill="#FFFFFF" fontFamily='"Rajdhani", monospace' fontWeight={700}>
+          {level}
+        </text>
+      )}
+      {/* 右下角：已镶嵌宝石数（无底色，与左下角等级文字一致） */}
+      {gemCount > 0 && (
+        <text x={15} y={15} textAnchor="end" fontSize={4} fill="#00FF9D" fontFamily='"Rajdhani", monospace' fontWeight={700}>
+          {gemCount}
+        </text>
+      )}
+      {/* 右上角：强化等级 */}
+      {enhanceLevel > 0 && (
+        <g>
+          <text x={14.5} y={3} textAnchor="end" fontSize={3.5} fill="#FFD700" fontFamily='"Rajdhani", monospace' fontWeight={700}>
+            +{enhanceLevel}
+          </text>
+        </g>
+      )}
     </svg>
   );
 });

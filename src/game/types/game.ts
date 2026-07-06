@@ -214,6 +214,16 @@ export interface Equipment {
   elementalDamage?: number;
   // 宝石镶嵌系统：已镶嵌的宝石列表（最多15颗）
   socketedGems?: SocketedGem[];
+  // 强化等级
+  enhanceLevel?: number;
+  // 附魔系统：附魔效果（百分比加成到对应属性）
+  enchantment?: Enchantment;
+}
+
+export interface Enchantment {
+  stat: 'attack' | 'health' | 'defense' | 'critRate' | 'resistance';
+  rarity: ItemRarity;
+  percent: number;
 }
 
 export interface SetBonus {

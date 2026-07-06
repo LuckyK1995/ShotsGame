@@ -68,6 +68,7 @@ export function GemEmbedModal({ equipmentId, source, onClose, engineRef }: GemEm
   const [isProcessing, setIsProcessing] = useState(false);
   // 悬浮提示：1 秒后自动消失
   const [floatToast, setFloatToast] = useState<{ success: boolean; message: string } | null>(null);
+  const [toastKey, setToastKey] = useState(0);
 
   const equipment = equipmentFromStore;
   if (!equipment) {
@@ -124,13 +125,16 @@ export function GemEmbedModal({ equipmentId, source, onClose, engineRef }: GemEm
     setTimeout(() => {
       const ret = engineRef.current?.socketGem(equipment.id, selectedGemId, source);
       if (!ret) {
+        setToastKey(k => k + 1);
         setFloatToast({ success: false, message: '引擎未就绪' });
       } else if (ret.success) {
+        setToastKey(k => k + 1);
         setFloatToast({
           success: true,
-          message: `✦ 镶嵌成功！${getGemDef(selectedGemId)?.name ?? ''} ✦`,
+          message: `✦ 镶嵌成功 ✦`,
         });
       } else {
+        setToastKey(k => k + 1);
         setFloatToast({
           success: false,
           message: ret.reset
@@ -142,14 +146,14 @@ export function GemEmbedModal({ equipmentId, source, onClose, engineRef }: GemEm
     }, 300);
   };
 
-  const selectedDef = selectedGemId ? getGemDef(selectedGemId) : null;
-  // 宝石格子尺寸：原来的 1/3（原 20x20 → 现 7x7，但需保留首字显示，用 8x8）
+  // 宝石格子尺寸：原来的 1/3
   const GEM_CELL = 8;
 
-  // 悬浮提示 1 秒后自动消失
+  // 悬浮提示自动消失（匹配动画时长）
   useEffect(() => {
     if (!floatToast) return;
-    const id = setTimeout(() => setFloatToast(null), 1000);
+    const duration = floatToast.success ? 1100 : 1000;
+    const id = setTimeout(() => setFloatToast(null), duration);
     return () => clearTimeout(id);
   }, [floatToast]);
 
@@ -163,7 +167,7 @@ export function GemEmbedModal({ equipmentId, source, onClose, engineRef }: GemEm
         className="flex flex-col"
         style={{
           ...cardStyle,
-          width: '320px',
+          width: '340px',
           padding: '8px 10px',
           maxHeight: '90%',
           boxSizing: 'border-box',
@@ -210,7 +214,7 @@ export function GemEmbedModal({ equipmentId, source, onClose, engineRef }: GemEm
                   borderRadius: '8px',
                 }}
               >
-                <EquipmentIcon slot={equipment.slot} rarity={equipment.rarity} variant={equipment.iconVariant} size={28} />
+                <EquipmentIcon slot={equipment.slot} rarity={equipment.rarity} variant={equipment.iconVariant} size={28} gemCount={socketCount} enhanceLevel={equipment.enhanceLevel || 0} level={equipment.level} />
               </div>
               {/* 镶嵌加成显示在装备图标右侧 */}
               <div className="flex-1 min-w-0">
@@ -227,11 +231,11 @@ export function GemEmbedModal({ equipmentId, source, onClose, engineRef }: GemEm
                 </div>
                 <div className="flex flex-col gap-0">
                   {([
-                    { key: 'attack', label: '攻', color: neonPink },
-                    { key: 'health', label: '生', color: '#34C759' },
-                    { key: 'defense', label: '防', color: '#5BA3E0' },
-                    { key: 'critRate', label: '暴', color: neonPurple },
-                    { key: 'resistance', label: '抗', color: neonCyan },
+                    { key: 'attack', label: '攻击力', color: neonPink },
+                    { key: 'health', label: '生命', color: '#FF2D55' },
+                    { key: 'defense', label: '防御', color: '#5BA3E0' },
+                    { key: 'critRate', label: '暴击率', color: neonPurple },
+                    { key: 'resistance', label: '抗性', color: '#5BA3E0' },
                   ] as const).map(({ key, label, color }) => {
                     const v = gemStats[key];
                     if (v <= 0) return null;
@@ -253,37 +257,36 @@ export function GemEmbedModal({ equipmentId, source, onClose, engineRef }: GemEm
               </div>
             </div>
 
-            {/* 锁定类型提示 */}
-            {lockedType && (
-              <div
-                style={{
-                  ...neonText,
-                  fontSize: '7px',
-                  color: GEM_TYPE_INFO[lockedType].color,
-                  textAlign: 'center',
-                  padding: '1px 0',
-                  background: hexToRgba(GEM_TYPE_INFO[lockedType].color, 0.1),
-                  borderRadius: '3px',
-                  border: `1px solid ${hexToRgba(GEM_TYPE_INFO[lockedType].color, 0.3)}`,
-                }}
-              >
-                仅可镶嵌 {GEM_TYPE_INFO[lockedType].name}
-              </div>
-            )}
+            {/* 锁定类型提示 - 永久显示 */}
+            <div
+              style={{
+                ...neonText,
+                fontSize: '7px',
+                color: lockedType ? GEM_TYPE_INFO[lockedType].color : neonCyan,
+                textAlign: 'center',
+                padding: '1px 0',
+                background: hexToRgba(lockedType ? GEM_TYPE_INFO[lockedType].color : neonCyan, 0.1),
+                borderRadius: '3px',
+                border: `1px solid ${hexToRgba(lockedType ? GEM_TYPE_INFO[lockedType].color : neonCyan, 0.3)}`,
+              }}
+            >
+              {lockedType ? `仅可镶嵌 ${GEM_TYPE_INFO[lockedType].name}` : '只能镶嵌同一属性宝石'}
+            </div>
 
-            {/* 15 个宝石格子（5×3 网格，每个 8x8） */}
-            <div className="flex justify-center">
+            {/* 15 个宝石格子（靠左） + 竖线 + 概率信息（右侧） */}
+            <div className="flex gap-1 items-center flex-row">
+              {/* 15 个宝石格子（5×3 网格，无文字） */}
               <div
                 className="grid"
                 style={{
                   gridTemplateColumns: `repeat(5, ${GEM_CELL}px)`,
                   gridTemplateRows: `repeat(3, ${GEM_CELL}px)`,
                   gap: '2px',
+                  flexShrink: 0,
                 }}
               >
                 {Array.from({ length: MAX_GEM_SOCKETS }).map((_, i) => {
                   const g = socketedGems[i];
-                  const info = g ? GEM_TYPE_INFO[g.type] : null;
                   return (
                     <div
                       key={i}
@@ -293,21 +296,40 @@ export function GemEmbedModal({ equipmentId, source, onClose, engineRef }: GemEm
                           ? GEM_RARITY_BG[g.rarity]
                           : 'rgba(19, 16, 37, 0.5)',
                         border: `0.5px solid ${g ? GEM_RARITY_BORDER[g.rarity] : 'rgba(100, 100, 130, 0.25)'}`,
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        fontSize: '5px',
-                        color: info?.color || '#5A5A7A',
-                        fontFamily: '"Rajdhani", monospace',
-                        fontWeight: 700,
-                        lineHeight: 1,
                       }}
-                      title={g ? `${GEM_RARITY_LABELS[g.rarity]}${info?.name}` : '空槽位'}
-                    >
-                      {info?.short || ''}
-                    </div>
+                      title={g ? `${GEM_RARITY_LABELS[g.rarity]}${GEM_TYPE_INFO[g.type].name}` : '空槽位'}
+                    />
                   );
                 })}
+              </div>
+
+              {/* 竖线 */}
+              <div
+                aria-hidden
+                style={{
+                  width: '1px',
+                  alignSelf: 'stretch',
+                  background: 'linear-gradient(to bottom, rgba(176, 38, 255, 0.05), rgba(176, 38, 255, 0.5) 20%, rgba(0, 245, 212, 0.4) 80%, rgba(0, 245, 212, 0.05))',
+                  flexShrink: 0,
+                }}
+              />
+
+              {/* 概率信息：4 行 */}
+              <div className="flex flex-col" style={{ ...neonText, fontSize: '6px', lineHeight: 1.4, flex: 1, minWidth: 0 }}>
+                <div style={{ color: '#8B80A0' }}>成功概率：</div>
+                <div>
+                  <span style={{ color: socketCount === 0 ? neonGreen : '#5A5A7A' }}>100%</span>
+                  <span style={{ color: '#5A5A7A' }}>/</span>
+                  <span style={{ color: socketCount > 0 ? neonYellow : '#5A5A7A' }}>50%</span>
+                </div>
+                <div style={{ color: '#8B80A0' }}>失败结果：</div>
+                <div style={{ wordBreak: 'break-all' }}>
+                  <span style={{ color: socketCount === 0 ? neonGreen : '#5A5A7A' }}>无</span>
+                  <span style={{ color: '#5A5A7A' }}>/</span>
+                  <span style={{ color: socketCount > 0 && socketCount < 7 ? neonYellow : '#5A5A7A' }}>保留宝石</span>
+                  <span style={{ color: '#5A5A7A' }}>/</span>
+                  <span style={{ color: socketCount >= 7 ? '#FF6B35' : '#5A5A7A' }}>损毁所有宝石</span>
+                </div>
               </div>
             </div>
           </div>
@@ -360,6 +382,17 @@ export function GemEmbedModal({ equipmentId, source, onClose, engineRef }: GemEm
                     {group.gems.map(({ stack, def }) => {
                       const isSelected = selectedGemId === stack.itemId;
                       const info = GEM_TYPE_INFO[def.type];
+                      const statName = info.name.replace('宝石', '');
+                      // 宝石名称颜色对应品质颜色
+                      const rarityColor = GEM_RARITY_BORDER[def.rarity];
+                      // 宝石属性颜色对应战斗力面板的颜色
+                      const combatColor: Record<GemType, string> = {
+                        attack: neonPink,
+                        health: '#FF2D55',
+                        defense: '#5BA3E0',
+                        critRate: neonPurple,
+                        resistance: '#5BA3E0',
+                      };
                       return (
                         <button
                           key={stack.itemId}
@@ -370,54 +403,57 @@ export function GemEmbedModal({ equipmentId, source, onClose, engineRef }: GemEm
                             gap: '4px',
                             padding: '2px 4px',
                             background: isSelected
-                              ? `linear-gradient(90deg, ${hexToRgba(info.color, 0.25)} 0%, ${hexToRgba(info.color, 0.08)} 100%)`
+                              ? `linear-gradient(90deg, ${hexToRgba(rarityColor, 0.25)} 0%, ${hexToRgba(rarityColor, 0.08)} 100%)`
                               : 'rgba(19, 16, 37, 0.6)',
-                            border: `1px solid ${isSelected ? info.color : 'rgba(100, 100, 130, 0.25)'}`,
+                            border: `1px solid ${isSelected ? rarityColor : 'rgba(100, 100, 130, 0.25)'}`,
                             borderRadius: '4px',
                             cursor: 'pointer',
                             width: '100%',
                             textAlign: 'left',
-                            boxShadow: isSelected ? `0 0 4px ${hexToRgba(info.color, 0.3)}` : 'none',
+                            boxShadow: isSelected ? `0 0 4px ${hexToRgba(rarityColor, 0.3)}` : 'none',
                           }}
                         >
-                          <span style={{ fontSize: '10px', flexShrink: 0 }}>{def.icon}</span>
-                          <span
-                            style={{
-                              ...neonText,
-                              fontSize: '7.5px',
-                              color: isSelected ? '#FFFFFF' : '#C0C0E0',
-                              fontWeight: 700,
-                              flex: 1,
-                              minWidth: 0,
-                              overflow: 'hidden',
-                              textOverflow: 'ellipsis',
-                              whiteSpace: 'nowrap',
-                            }}
-                          >
-                            {def.name}
-                          </span>
-                          <span
-                            style={{
-                              ...neonText,
-                              fontSize: '6.5px',
-                              color: GEM_RARITY_BORDER[def.rarity],
-                              fontWeight: 700,
-                              flexShrink: 0,
-                            }}
-                          >
-                            +{def.value}
-                          </span>
-                          <span
-                            style={{
-                              ...neonText,
-                              fontSize: '6.5px',
-                              color: neonYellow,
-                              fontWeight: 700,
-                              flexShrink: 0,
-                            }}
-                          >
-                            ×{stack.count}
-                          </span>
+                          {/* Panel 1: 图标 + 名称 */}
+                          <div className="flex items-center gap-1" style={{ flex: 1, minWidth: 0 }}>
+                            <span style={{ fontSize: '10px', flexShrink: 0 }}>{def.icon}</span>
+                            <span
+                              style={{
+                                ...neonText,
+                                fontSize: '7.5px',
+                                color: isSelected ? '#FFFFFF' : rarityColor,
+                                fontWeight: 700,
+                                minWidth: 0,
+                                overflow: 'hidden',
+                                textOverflow: 'ellipsis',
+                                whiteSpace: 'nowrap',
+                              }}
+                            >
+                              {def.name}
+                            </span>
+                          </div>
+                          {/* Panel 2: 属性+值 ×数量 */}
+                          <div className="flex items-center gap-1" style={{ flexShrink: 0 }}>
+                            <span
+                              style={{
+                                ...neonText,
+                                fontSize: '6.5px',
+                                color: combatColor[def.type],
+                                fontWeight: 700,
+                              }}
+                            >
+                              {statName}+{def.value}
+                            </span>
+                            <span
+                              style={{
+                                ...neonText,
+                                fontSize: '6.5px',
+                                color: neonYellow,
+                                fontWeight: 700,
+                              }}
+                            >
+                              ×{stack.count}
+                            </span>
+                          </div>
                         </button>
                       );
                     })}
@@ -426,27 +462,6 @@ export function GemEmbedModal({ equipmentId, source, onClose, engineRef }: GemEm
               )}
             </div>
           </div>
-        </div>
-
-        {/* 概率提示 */}
-        <div
-          className="mt-1.5 pt-1.5 flex justify-between items-center"
-          style={{ borderTop: '1px solid rgba(176, 38, 255, 0.15)', flexShrink: 0 }}
-        >
-          <div style={{ ...neonText, fontSize: '7px', color: '#8B80A0' }}>
-            {socketCount === 0 ? (
-              <span style={{ color: neonGreen }}>首颗 100% 成功</span>
-            ) : socketCount < 7 ? (
-              <span style={{ color: neonYellow }}>50% · 失败保留</span>
-            ) : (
-              <span style={{ color: '#FF6B35' }}>50% · 失败全部碎裂</span>
-            )}
-          </div>
-          {selectedDef && (
-            <div style={{ ...neonText, fontSize: '7px', color: neonCyan, textAlign: 'right' }}>
-              只能镶嵌同一属性宝石，已选：{selectedDef.name}
-            </div>
-          )}
         </div>
 
         {/* 底部按钮区（自动镶嵌在左，镶嵌在右） */}
@@ -496,35 +511,23 @@ export function GemEmbedModal({ equipmentId, source, onClose, engineRef }: GemEm
         </div>
       </div>
 
-      {/* 悬浮提示：1 秒后自动消失，成功有变大变小特效 */}
+      {/* 悬浮提示：无框纯文字，每次点击重新触发动画 */}
       {floatToast && (
         <div
+          key={toastKey}
           className={`absolute inset-0 flex items-center justify-center pointer-events-none z-40 ${
             floatToast.success ? 'gem-embed-success-toast' : 'gem-embed-fail-toast'
           }`}
-          style={{
-            top: 0,
-            left: 0,
-            right: 0,
-            bottom: 0,
-          }}
+          style={{ top: 0, left: 0, right: 0, bottom: 0 }}
         >
           <div
             style={{
-              padding: '8px 16px',
-              borderRadius: '8px',
-              background: floatToast.success
-                ? 'rgba(0, 255, 157, 0.25)'
-                : 'rgba(255, 45, 85, 0.25)',
-              border: `2px solid ${floatToast.success ? neonGreen : '#FF2D55'}`,
-              boxShadow: `0 0 20px ${floatToast.success ? hexToRgba(neonGreen, 0.6) : 'rgba(255, 45, 85, 0.5)'}`,
               ...neonText,
-              fontSize: floatToast.success ? '14px' : '10px',
+              fontSize: floatToast.success ? '18px' : '12px',
               fontWeight: 700,
               color: floatToast.success ? neonGreen : '#FF2D55',
-              textShadow: `0 0 8px ${floatToast.success ? hexToRgba(neonGreen, 0.8) : 'rgba(255, 45, 85, 0.8)'}`,
+              textShadow: `0 0 12px ${floatToast.success ? hexToRgba(neonGreen, 0.9) : 'rgba(255, 45, 85, 0.9)'}, 0 0 24px ${floatToast.success ? hexToRgba(neonGreen, 0.5) : 'rgba(255, 45, 85, 0.5)'}`,
               textAlign: 'center',
-              maxWidth: '80%',
             }}
           >
             {floatToast.message}

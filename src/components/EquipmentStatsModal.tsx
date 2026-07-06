@@ -10,6 +10,8 @@ import {
   getQualitySetGroups,
   QUALITY_SETS,
 } from '../game/data/equipment';
+import { getEnhanceAttackBonus } from '../game/data/enhanceItems';
+import { ENCHANT_STAT_INFO } from '../game/data/enchantItems';
 
 interface EquipmentStatsModalProps {
   onClose: () => void;
@@ -280,7 +282,7 @@ export function EquipmentStatsModal({ onClose }: EquipmentStatsModalProps) {
     >
       <div
         className="relative flex flex-col pointer-events-auto"
-        style={{ ...cardStyle, width: '400px', maxWidth: '94vw', padding: '12px 14px' }}
+        style={{ ...cardStyle, width: '365px', maxWidth: '94vw', padding: '12px 14px' }}
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex justify-between items-center mb-2">
@@ -307,7 +309,7 @@ export function EquipmentStatsModal({ onClose }: EquipmentStatsModalProps) {
 
         <div className="flex gap-2" style={{ height: '240px' }}>
           {/* 左侧：上装备属性 + 下套装属性 */}
-          <div className="flex flex-col gap-2" style={{ width: '55%' }}>
+          <div className="flex flex-col gap-2" style={{ width: '60%' }}>
             {/* 左上：单件装备属性（占2/3高度） */}
             <div className="flex flex-col" style={{ ...panelStyle, height: '66%', padding: '6px 8px' }}>
               <div className="flex items-center justify-between mb-1.5">
@@ -332,7 +334,7 @@ export function EquipmentStatsModal({ onClose }: EquipmentStatsModalProps) {
                         background: 'rgba(19, 16, 37, 0.6)',
                       }}
                     >
-                      <EquipmentIcon slot={currentEquip.slot} rarity={currentEquip.rarity} variant={currentEquip.iconVariant} size={26} />
+                      <EquipmentIcon slot={currentEquip.slot} rarity={currentEquip.rarity} variant={currentEquip.iconVariant} size={26} gemCount={currentEquip.socketedGems?.length || 0} enhanceLevel={currentEquip.enhanceLevel || 0} level={currentEquip.level} />
                     </div>
                     <div className="flex-1 min-w-0">
                       <div
@@ -349,7 +351,7 @@ export function EquipmentStatsModal({ onClose }: EquipmentStatsModalProps) {
                       </div>
                     </div>
                   </div>
-                  <div className="space-y-0.5">
+                  <div className="grid grid-cols-3 gap-x-2 gap-y-0.5">
                     {currentEquip.attack ? <StatRow label="攻击" value={`+${currentEquip.attack}`} color={neonPink} /> : null}
                     {currentEquip.health ? <StatRow label="生命" value={`+${currentEquip.health}`} color="#34C759" /> : null}
                     {currentEquip.defense ? <StatRow label="防御" value={`+${currentEquip.defense}`} color="#5BA3E0" /> : null}
@@ -362,42 +364,113 @@ export function EquipmentStatsModal({ onClose }: EquipmentStatsModalProps) {
                     ) : null}
                   </div>
                   {currentEquip.affixes && currentEquip.affixes.length > 0 && (
-                    <div className="mt-1.5 pt-1" style={{ borderTop: '1px solid rgba(176, 38, 255, 0.15)' }}>
-                      <div style={{ ...neonText, fontSize: '7px', color: neonYellow, marginBottom: '2px' }}>词条</div>
-                      <div className="space-y-0.5">
-                        {currentEquip.affixes.map((a, i) => {
-                          let color = '#E0E0FF';
+                    <div className="mt-1.5 pt-1 grid grid-cols-3 gap-x-2 gap-y-0.5" style={{ borderTop: '1px solid rgba(176, 38, 255, 0.15)' }}>
+                      {currentEquip.affixes.map((a, i) => {
+                        let color = '#E0E0FF';
+                        switch (a.type) {
+                          case 'attack': color = neonPink; break;
+                          case 'defense': color = '#5BA3E0'; break;
+                          case 'resistance': color = '#5BA3E0'; break;
+                          case 'health': color = '#34C759'; break;
+                          case 'critRate': color = neonPurple; break;
+                          case 'critDamage': color = neonPurple; break;
+                          case 'attackSpeed': color = neonCyan; break;
+                          case 'range': color = '#34C759'; break;
+                          case 'pierce': color = neonYellow; break;
+                          case 'elementalDamage':
+                            color = a.element ? ELEMENT_COLORS[a.element] : '#E0E0FF';
+                            break;
+                          case 'statusFreeze': color = '#5BC0EB'; break;
+                          case 'statusPoison': color = '#9B59B6'; break;
+                          case 'statusBurn': color = '#FF6B35'; break;
+                        }
+                        const isPercent = a.type === 'critRate' || a.type === 'critDamage' || a.type === 'attackSpeed' || a.type === 'statusFreeze' || a.type === 'statusPoison' || a.type === 'statusBurn';
+                        const getAffixLabel = () => {
                           switch (a.type) {
-                            case 'attack': color = neonPink; break;
-                            case 'defense': color = '#5BA3E0'; break;
-                            case 'resistance': color = '#5BA3E0'; break;
-                            case 'health': color = '#34C759'; break;
-                            case 'critRate': color = neonPurple; break;
-                            case 'critDamage': color = neonPurple; break;
-                            case 'attackSpeed': color = neonCyan; break;
-                            case 'range': color = '#34C759'; break;
-                            case 'pierce': color = neonYellow; break;
-                            case 'elementalDamage':
-                              color = a.element ? ELEMENT_COLORS[a.element] : '#E0E0FF';
-                              break;
-                            case 'statusFreeze': color = '#5BC0EB'; break;
-                            case 'statusPoison': color = '#9B59B6'; break;
-                            case 'statusBurn': color = '#FF6B35'; break;
+                            case 'attack': return '攻击';
+                            case 'defense': return '防御';
+                            case 'resistance': return '抗性';
+                            case 'health': return '生命';
+                            case 'critRate': return '暴击';
+                            case 'critDamage': return '暴伤';
+                            case 'attackSpeed': return '攻速';
+                            case 'range': return '射程';
+                            case 'pierce': return '穿透';
+                            case 'elementalDamage': return a.element ? `${ELEMENT_LABELS[a.element]}伤` : '属性';
+                            case 'statusFreeze': return '冰冻';
+                            case 'statusPoison': return '中毒';
+                            case 'statusBurn': return '灼烧';
+                            default: return a.type;
                           }
-                          return (
-                            <div key={i} className="flex justify-between">
-                              <span style={{ ...neonText, fontSize: '7px', color }}>
-                                {affixLabel(a.type, a.value, a.element).split(' ').slice(1).join(' ')}
-                              </span>
-                              <span style={{ ...neonText, fontSize: '7px', color: '#FFFFFF' }}>
-                                +{a.value}{(a.type === 'critRate' || a.type === 'critDamage' || a.type === 'attackSpeed' || a.type === 'statusFreeze' || a.type === 'statusPoison' || a.type === 'statusBurn') ? '%' : ''}
-                              </span>
-                            </div>
-                          );
-                        })}
-                      </div>
+                        };
+                        return (
+                          <div key={i} className="flex justify-between min-w-0">
+                            <span className="truncate" style={{ ...neonText, fontSize: '7px', color }}>
+                              {getAffixLabel()}
+                            </span>
+                            <span style={{ ...neonText, fontSize: '7px', color: '#FFFFFF', flexShrink: 0, marginLeft: '4px' }}>
+                              +{a.value}{isPercent ? '%' : ''}
+                            </span>
+                          </div>
+                        );
+                      })}
                     </div>
                   )}
+                  {(() => {
+                    const gems = currentEquip.socketedGems || [];
+                    const cnt = gems.length;
+                    const stats = { attack: 0, health: 0, defense: 0, critRate: 0, resistance: 0 };
+                    for (const g of gems) stats[g.type] += g.value;
+                    const hasGem = cnt > 0;
+                    const enhanceLevel = currentEquip.enhanceLevel || 0;
+                    const enhanceBonus = getEnhanceAttackBonus(enhanceLevel);
+                    const hasEnhance = enhanceLevel > 0;
+                    const ench = currentEquip.enchantment;
+                    return (
+                      <div className="grid grid-cols-3 gap-x-2 mt-1" style={{ borderTop: '1px solid rgba(176, 38, 255, 0.15)', paddingTop: '4px' }}>
+                        {/* 强化 */}
+                        <div className="flex flex-col gap-0.5">
+                          <div className="flex justify-between min-w-0">
+                            <span style={{ ...neonText, fontSize: '7px', color: '#8B80A0' }}>强化</span>
+                            {hasEnhance && (
+                              <span style={{ ...neonText, fontSize: '7px', color: neonPink, marginLeft: '4px', flexShrink: 0 }}>
+                                攻击+{enhanceBonus}
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                        {/* 宝石 */}
+                        <div className="flex flex-col gap-0.5">
+                          <div className="flex justify-between min-w-0">
+                            <span style={{ ...neonText, fontSize: '7px', color: '#8B80A0' }}>宝石</span>
+                            {hasGem && (
+                              <span style={{ ...neonText, fontSize: '7px', lineHeight: 1.2, marginLeft: '4px' }}>
+                                {stats.attack > 0 && <span style={{ color: neonPink }}>攻击+{stats.attack} </span>}
+                                {stats.health > 0 && <span style={{ color: '#FF2D55' }}>生命+{stats.health} </span>}
+                                {stats.defense > 0 && <span style={{ color: '#5BA3E0' }}>防御+{stats.defense} </span>}
+                                {stats.critRate > 0 && <span style={{ color: neonPurple }}>暴击率+{stats.critRate}% </span>}
+                                {stats.resistance > 0 && <span style={{ color: '#5BA3E0' }}>抗性+{stats.resistance}</span>}
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                        {/* 附魔 */}
+                        <div className="flex flex-col gap-0.5">
+                          <div className="flex justify-between min-w-0">
+                            <span style={{ ...neonText, fontSize: '7px', color: '#8B80A0' }}>附魔</span>
+                            {ench && (
+                              <span style={{ ...neonText, fontSize: '7px', marginLeft: '4px' }}>
+                                <span style={{ color: ENCHANT_STAT_INFO[ench.stat].color }}>
+                                  {ENCHANT_STAT_INFO[ench.stat].name}
+                                </span>
+                                <span style={{ color: '#FFFFFF' }}>+{ench.percent}%</span>
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })()}
                 </div>
               ) : (
                 <div className="flex-1 flex items-center justify-center">
@@ -413,31 +486,26 @@ export function EquipmentStatsModal({ onClose }: EquipmentStatsModalProps) {
                 {setGroups.length === 0 ? (
                   <span style={{ ...neonText, fontSize: '7px', color: '#8B80A0' }}>未激活任何套装</span>
                 ) : (
-                  setGroups.map((g, i) => (
+                  setGroups.map((g, i) => {
+                    const tierColor = RARITY_COLORS[g.tier as EquipRarity] || neonYellow;
+                    return (
                     <div key={i} className="flex flex-col" style={{ borderBottom: i < setGroups.length - 1 ? '1px solid rgba(176, 38, 255, 0.1)' : 'none', paddingBottom: '2px' }}>
-                      <div className="flex justify-between">
-                        <span style={{ ...neonText, fontSize: '7px', fontWeight: 700, color: RARITY_COLORS[g.tier as EquipRarity] || neonYellow }}>
-                          {g.set.name} Lv.{g.level} ({g.count}件)
-                        </span>
-                        <span style={{ ...neonText, fontSize: '6px', color: neonYellow }}>
-                          {g.pieces}件套
-                        </span>
-                      </div>
                       {g.set.effects.filter(e => g.count >= e.pieces).map((e, j) => (
                         <div key={j} style={{ ...neonText, fontSize: '6px' }}>
-                          <span style={{ color: '#FFFFFF' }}>{e.pieces}件: </span>
+                          <span style={{ color: tierColor, fontWeight: 700 }}>{e.pieces}件: </span>
                           {renderSetEffectDescription(e.description)}
                         </div>
                       ))}
                     </div>
-                  ))
+                    );
+                  })
                 )}
               </div>
             </div>
           </div>
 
           {/* 右侧：装备带来的属性加成 + 特殊效果 */}
-          <div className="flex flex-col" style={{ ...panelStyle, width: '45%', padding: '6px 8px' }}>
+          <div className="flex flex-col" style={{ ...panelStyle, width: '38%', padding: '6px 8px' }}>
             <div className="flex items-center justify-between mb-1.5">
               <span style={{ ...neonText, fontSize: '8px', color: neonPurple }}>装备加成</span>
               {rightPages.length > 1 && (
