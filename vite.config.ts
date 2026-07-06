@@ -8,6 +8,9 @@ export default defineConfig({
   server: {
     host: '0.0.0.0',
     port: 5173,
+    strictPort: true, // 锁死 5173 端口，被占用时报错而不跳转其他端口
+    open: true, // 启动时自动打开浏览器
+    allowedHosts: ['mygame.loca.lt', '.loca.lt'],
   },
   build: {
     sourcemap: 'hidden',

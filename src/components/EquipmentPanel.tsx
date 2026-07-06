@@ -112,7 +112,15 @@ interface EquipmentPanelProps {
 }
 
 const EquipmentPanel: React.FC<EquipmentPanelProps> = ({ onTabChange, engineRef, onShowStats }) => {
-  const { equipment, equipmentStorage, player, setEquipment, setEquipmentStorage } = useGameStore();
+  // 用 selector 订阅，避免无关字段变化（玩家坐标/buff/天气）触发整面板重渲染
+  const equipment = useGameStore(s => s.equipment);
+  const equipmentStorage = useGameStore(s => s.equipmentStorage);
+  const playerLevel = useGameStore(s => s.player?.level ?? 0);
+  const setEquipment = useGameStore(s => s.setEquipment);
+  const setEquipmentStorage = useGameStore(s => s.setEquipmentStorage);
+  const player = { level: playerLevel } as const;
+  // 仓库页签：装备 / 宝石 / 强化 / 附魔（仅装备页签有数据，其他预留扩展）
+  const [storageTab, setStorageTab] = useState<'equipment' | 'gem' | 'enhance' | 'enchant'>('equipment');
   const [selectedItem, setSelectedItem] = useState<
     { equipment: Equipment; source: 'equipped' | 'storage' } | null
   >(null);
@@ -396,96 +404,162 @@ const EquipmentPanel: React.FC<EquipmentPanelProps> = ({ onTabChange, engineRef,
       />
 
       <div className="flex-1 flex flex-col gap-1.5">
-        <div
-          style={{ ...neonText, fontSize: '9px', color: neonPurple, letterSpacing: '1px' }}
-        >
-          储物 ({equipmentStorage.length}/200)
+        {/* 仓库页签栏：装备 / 宝石 / 强化 / 附魔 */}
+        <div className="flex gap-1">
+          {([
+            { id: 'equipment', label: '装备' },
+            { id: 'gem', label: '宝石' },
+            { id: 'enhance', label: '强化' },
+            { id: 'enchant', label: '附魔' },
+          ] as const).map(tab => {
+            const isActive = storageTab === tab.id;
+            return (
+              <button
+                key={tab.id}
+                onClick={() => setStorageTab(tab.id)}
+                style={{
+                  fontFamily: '"Rajdhani", "Orbitron", monospace',
+                  fontSize: '8px',
+                  fontWeight: 700,
+                  letterSpacing: '0.5px',
+                  color: isActive ? neonCyan : '#5A5A7A',
+                  background: isActive ? 'rgba(0, 245, 212, 0.12)' : 'rgba(19, 16, 37, 0.5)',
+                  border: `1px solid ${isActive ? 'rgba(0, 245, 212, 0.4)' : 'rgba(100, 100, 130, 0.2)'}`,
+                  borderRadius: '6px 6px 0 0',
+                  borderBottom: isActive ? 'none' : `1px solid rgba(100, 100, 130, 0.2)`,
+                  boxShadow: isActive ? `0 0 6px rgba(0, 245, 212, 0.2)` : 'none',
+                  padding: '3px 8px',
+                  cursor: 'pointer',
+                  flex: 1,
+                  transition: 'all 0.15s ease',
+                }}
+              >
+                {tab.label}
+              </button>
+            );
+          })}
         </div>
 
-        <div
-          className="flex-1 overflow-y-auto p-1.5"
-          style={{
-            background: 'rgba(13, 11, 26, 0.4)',
-            borderRadius: '8px',
-            border: '1px solid rgba(176, 38, 255, 0.1)',
-          }}
-        >
-          <div
-            className="grid"
-            style={{
-              gridTemplateColumns: 'repeat(5, 36px)',
-              rowGap: '1px',
-              justifyContent: 'space-between',
-            }}
-          >
-            {Array.from({ length: Math.max(equipmentStorage.length, 45) }).map((_, index) => {
-              const item = equipmentStorage[index];
-              return (
-                <div
-                  key={index}
-                  className="flex flex-col items-center justify-center cursor-pointer relative"
-                  style={{ width: '36px', height: '36px', marginBottom: '1px', ...(item ? itemSlotStyle(item.rarity) : storageEmptyStyle) }}
-                  onClick={() => item && handleStorageClick(item)}
+        {storageTab === 'equipment' ? (
+          <>
+            <div
+              className="flex-1 overflow-y-auto p-1.5"
+              style={{
+                background: 'rgba(13, 11, 26, 0.4)',
+                borderRadius: '8px',
+                border: '1px solid rgba(176, 38, 255, 0.1)',
+              }}
+            >
+              <div
+                className="grid"
+                style={{
+                  gridTemplateColumns: 'repeat(5, 36px)',
+                  rowGap: '1px',
+                  justifyContent: 'space-between',
+                }}
+              >
+                {Array.from({ length: Math.max(equipmentStorage.length, 45) }).map((_, index) => {
+                  const item = equipmentStorage[index];
+                  return (
+                    <div
+                      key={index}
+                      className="flex flex-col items-center justify-center cursor-pointer relative"
+                      style={{ width: '36px', height: '36px', marginBottom: '1px', ...(item ? itemSlotStyle(item.rarity) : storageEmptyStyle) }}
+                      onClick={() => item && handleStorageClick(item)}
+                    >
+                      {item ? (
+                        <>
+                          <EquipmentIcon slot={item.slot} rarity={item.rarity} variant={item.iconVariant} size={28} />
+                          <span
+                            className="absolute bottom-0.5 left-1"
+                            style={{
+                              fontFamily: '"Rajdhani", "Orbitron", monospace',
+                              fontSize: '8px',
+                              color: '#FFFFFF',
+                              textShadow: '0 0 4px rgba(255,255,255,0.5)',
+                            }}
+                          >
+                            {item.level}
+                          </span>
+                        </>
+                      ) : null}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+
+            <div className="flex justify-between items-center gap-2 pt-1" style={{ borderTop: '1px solid rgba(176, 38, 255, 0.15)' }}>
+              {/* 左侧：仓库计数，垂直居中 */}
+              <span
+                style={{
+                  fontFamily: '"Rajdhani", "Orbitron", monospace',
+                  fontSize: '9px',
+                  color: '#8B80A0',
+                  fontWeight: 600,
+                  letterSpacing: '0.5px',
+                  lineHeight: 1,
+                }}
+              >
+                {equipmentStorage.length}/200
+              </span>
+              {/* 右侧：操作按钮 */}
+              <div className="flex gap-2">
+                <button
+                  onClick={handleSortStorage}
+                  style={{
+                    fontFamily: '"Rajdhani", "Orbitron", monospace',
+                    fontSize: '8px',
+                    fontWeight: 600,
+                    color: neonPurple,
+                    background: 'rgba(176, 38, 255, 0.1)',
+                    border: '1px solid rgba(176, 38, 255, 0.25)',
+                    borderRadius: '6px',
+                    boxShadow: '0 0 6px rgba(176, 38, 255, 0.1)',
+                    padding: '4px 8px',
+                    cursor: 'pointer',
+                    minWidth: '52px',
+                  }}
                 >
-                  {item ? (
-                    <>
-                      <EquipmentIcon slot={item.slot} rarity={item.rarity} variant={item.iconVariant} size={28} />
-                      <span
-                        className="absolute bottom-0.5 left-1"
-                        style={{
-                          fontFamily: '"Rajdhani", "Orbitron", monospace',
-                          fontSize: '8px',
-                          color: '#FFFFFF',
-                          textShadow: '0 0 4px rgba(255,255,255,0.5)',
-                        }}
-                      >
-                        {item.level}
-                      </span>
-                    </>
-                  ) : null}
-                </div>
-              );
-            })}
+                  整理
+                </button>
+                <button
+                  onClick={() => setShowSellPicker(true)}
+                  style={{
+                    fontFamily: '"Rajdhani", "Orbitron", monospace',
+                    fontSize: '8px',
+                    fontWeight: 600,
+                    color: '#FFD700',
+                    background: 'rgba(255, 215, 0, 0.1)',
+                    border: '1px solid rgba(255, 215, 0, 0.3)',
+                    borderRadius: '6px',
+                    boxShadow: '0 0 6px rgba(255, 215, 0, 0.15)',
+                    padding: '4px 8px',
+                    cursor: 'pointer',
+                  }}
+                >
+                  批量出售
+                </button>
+              </div>
+            </div>
+          </>
+        ) : (
+          /* 宝石/强化/附魔页签：暂未实现，预留占位 */
+          <div
+            className="flex-1 flex items-center justify-center"
+            style={{
+              background: 'rgba(13, 11, 26, 0.4)',
+              borderRadius: '8px',
+              border: '1px solid rgba(176, 38, 255, 0.1)',
+              color: '#5A5A7A',
+              fontFamily: '"Rajdhani", "Orbitron", monospace',
+              fontSize: '10px',
+              letterSpacing: '1px',
+            }}
+          >
+            敬请期待
           </div>
-        </div>
-
-        <div className="flex justify-end gap-2 pt-1" style={{ borderTop: '1px solid rgba(176, 38, 255, 0.15)' }}>
-          <button
-            onClick={handleSortStorage}
-            style={{
-              fontFamily: '"Rajdhani", "Orbitron", monospace',
-              fontSize: '8px',
-              fontWeight: 600,
-              color: neonPurple,
-              background: 'rgba(176, 38, 255, 0.1)',
-              border: '1px solid rgba(176, 38, 255, 0.25)',
-              borderRadius: '6px',
-              boxShadow: '0 0 6px rgba(176, 38, 255, 0.1)',
-              padding: '4px 8px',
-              cursor: 'pointer',
-              minWidth: '52px',
-            }}
-          >
-            整理
-          </button>
-          <button
-            onClick={() => setShowSellPicker(true)}
-            style={{
-              fontFamily: '"Rajdhani", "Orbitron", monospace',
-              fontSize: '8px',
-              fontWeight: 600,
-              color: '#FFD700',
-              background: 'rgba(255, 215, 0, 0.1)',
-              border: '1px solid rgba(255, 215, 0, 0.3)',
-              borderRadius: '6px',
-              boxShadow: '0 0 6px rgba(255, 215, 0, 0.15)',
-              padding: '4px 8px',
-              cursor: 'pointer',
-            }}
-          >
-            批量出售
-          </button>
-        </div>
+        )}
       </div>
 
       {/* 选中物品弹窗 */}

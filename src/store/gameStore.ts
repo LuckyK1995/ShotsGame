@@ -16,6 +16,10 @@ interface GameStore {
   codexEntries: CodexEntry[];
   achievements: Achievement[];
   unlockedAchievement: Achievement | null;
+  // 药水快捷栏：固定 4 格，存放药水 ItemStack（仅引用，物品栏内仍保留原物品）
+  potionHotbar: (ItemStack | null)[];
+  // 高品质掉落气泡通知（自动过期）
+  rareDropNotifications: { id: number; rarity: string; name: string; icon: string; kind: 'equipment' | 'item' }[];
   
   setGameState: (state: GameState, player: Player) => void;
   setPlayer: (player: Player) => void;
@@ -31,6 +35,9 @@ interface GameStore {
   setCodexEntries: (entries: CodexEntry[]) => void;
   setAchievements: (achievements: Achievement[]) => void;
   setUnlockedAchievement: (achievement: Achievement | null) => void;
+  setPotionHotbar: (hotbar: (ItemStack | null)[]) => void;
+  addRareDropNotification: (info: { id: number; rarity: string; name: string; icon: string; kind: 'equipment' | 'item' }) => void;
+  removeRareDropNotification: (id: number) => void;
 }
 
 export const useGameStore = create<GameStore>((set) => ({
@@ -48,6 +55,8 @@ export const useGameStore = create<GameStore>((set) => ({
   codexEntries: [],
   achievements: [],
   unlockedAchievement: null,
+  potionHotbar: [null, null, null, null],
+  rareDropNotifications: [],
   
   setGameState: (gameState, player) => set({ gameState, player }),
   setPlayer: (player) => set({ player }),
@@ -63,4 +72,11 @@ export const useGameStore = create<GameStore>((set) => ({
   setCodexEntries: (codexEntries) => set({ codexEntries }),
   setAchievements: (achievements) => set({ achievements }),
   setUnlockedAchievement: (unlockedAchievement) => set({ unlockedAchievement }),
+  setPotionHotbar: (potionHotbar) => set({ potionHotbar }),
+  addRareDropNotification: (info) => set((state) => ({
+    rareDropNotifications: [...state.rareDropNotifications, info].slice(-5),
+  })),
+  removeRareDropNotification: (id) => set((state) => ({
+    rareDropNotifications: state.rareDropNotifications.filter(n => n.id !== id),
+  })),
 }));

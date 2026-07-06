@@ -124,3 +124,29 @@ body {
 .blink {
   animation: blink 1s step-end infinite;
 }
+
+/* Mythic 装备图标闪烁动画（全局提取，避免每次渲染注入 <style>） */
+/* 性能优化：仅使用 opacity（合成层最廉价属性），避免 filter/transform 触发重绘重排 */
+@keyframes mythic-sparkle {
+  0%, 100% { opacity: 0.55; }
+  50% { opacity: 1; }
+}
+@keyframes mythic-glow {
+  0%, 100% { opacity: 0.1; }
+  50% { opacity: 0.65; }
+}
+.mythic-star {
+  animation: mythic-sparkle 2.4s ease-in-out infinite;
+  will-change: opacity;
+}
+.mythic-star-glow {
+  animation: mythic-glow 2.4s ease-in-out infinite;
+  will-change: opacity;
+}
+.mythic-star-1, .mythic-star-glow-1 { animation-delay: 0s; }
+.mythic-star-2, .mythic-star-glow-2 { animation-delay: 0.8s; }
+.mythic-star-3, .mythic-star-glow-3 { animation-delay: 1.6s; }
+@media (prefers-reduced-motion: reduce) {
+  .mythic-star, .mythic-star-glow { animation: none; opacity: 0.85; }
+}
+

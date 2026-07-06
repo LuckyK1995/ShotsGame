@@ -69,6 +69,11 @@ export class ObjectPool<T extends { active: boolean }> {
     return obj;
   }
 
+  // 是否还有 acquire 容量（调用方应在产生大量对象前检查）
+  canAcquire(): boolean {
+    return this.getActive().length < this.maxSize;
+  }
+
   release(obj: T): void {
     obj.active = false;
     this._cacheDirty = true;

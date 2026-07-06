@@ -19,6 +19,12 @@ interface GameEngineRef {
     learnAllStatSkills: () => void;
     learnAllCloneSkills: () => void;
     levelUpTo100: () => void;
+    levelUpBy: (amount: number) => void;
+    debugSkipWaves: (amount: number) => void;
+    debugMultiplyEnemySpeed: (multiplier: number) => void;
+    debugSpawnElite: () => void;
+    debugSpawnBoss: () => void;
+    debugSetAttacking: (enabled: boolean) => void;
     addSkillPoints: (amount: number) => void;
     getDebugConfig: () => {
       baseStats: { attack: number; attackSpeed: number; manualAttackSpeed: number; maxHealth: number; range: number; level: number };
@@ -215,6 +221,7 @@ const DebugPanel: React.FC<DebugPanelProps> = ({ engineRef }) => {
   const [enemyStatsForm, setEnemyStatsForm] = useState<Record<string, number>>({});
   const [powerTab, setPowerTab] = useState<'player' | 'enemy'>('player');
   const [statsTab, setStatsTab] = useState<'player' | 'enemy'>('player');
+  const [showResetConfirm, setShowResetConfirm] = useState(false);
   const [cachedPlayerStats, setCachedPlayerStats] = useState<Record<string, number>>({});
   const [cachedEnemyStats, setCachedEnemyStats] = useState<Record<string, number>>({});
 
@@ -253,6 +260,8 @@ const DebugPanel: React.FC<DebugPanelProps> = ({ engineRef }) => {
   const neonCyan = '#00F5D4';
   const neonPurple = '#B026FF';
   const neonPink = '#FF0080';
+  const neonBlue = '#00B4FF';
+  const neonGreen = '#00FF7F';
 
   const btnStyle = (color: string) => ({
     fontFamily: '"Rajdhani", "Orbitron", monospace',
@@ -651,12 +660,12 @@ const DebugPanel: React.FC<DebugPanelProps> = ({ engineRef }) => {
           <div style={sectionTitle}>等级 / 技能点</div>
           <div style={{ display: 'flex', gap: '6px' }}>
             <button
-              onClick={() => engineRef?.current?.levelUpTo100()}
+              onClick={() => engineRef?.current?.levelUpBy(100)}
               style={{ ...btnStyle(neonYellow), flex: 1 }}
               onMouseEnter={(e) => { e.currentTarget.style.background = `${neonYellow}20`; }}
               onMouseLeave={(e) => { e.currentTarget.style.background = `${neonYellow}10`; }}
             >
-              ⬆ 快速升100级
+              ⬆ 等级 +100
             </button>
             <button
               onClick={() => engineRef?.current?.addSkillPoints(200)}
@@ -679,6 +688,96 @@ const DebugPanel: React.FC<DebugPanelProps> = ({ engineRef }) => {
             onMouseLeave={(e) => { e.currentTarget.style.background = `${neonCyan}10`; }}
           >
             ⟳ 重置全部技能冷却
+          </button>
+        </div>
+
+        {/* 调试：跳关 / 召唤 / 速度 / 攻击开关 */}
+        <div style={{ marginBottom: '14px' }}>
+          <div style={sectionTitle}>调试指令</div>
+          <div style={{ display: 'flex', gap: '6px', marginBottom: '6px' }}>
+            <button
+              onClick={() => engineRef?.current?.debugSkipWaves(100)}
+              style={{ ...btnStyle(neonYellow), flex: 1 }}
+              onMouseEnter={(e) => { e.currentTarget.style.background = `${neonYellow}20`; }}
+              onMouseLeave={(e) => { e.currentTarget.style.background = `${neonYellow}10`; }}
+            >
+              ⏭ 跳100关
+            </button>
+            <button
+              onClick={() => engineRef?.current?.debugSpawnElite()}
+              style={{ ...btnStyle(neonPurple), flex: 1 }}
+              onMouseEnter={(e) => { e.currentTarget.style.background = `${neonPurple}20`; }}
+              onMouseLeave={(e) => { e.currentTarget.style.background = `${neonPurple}10`; }}
+            >
+              👹 召唤精英
+            </button>
+          </div>
+          <div style={{ display: 'flex', gap: '6px', marginBottom: '6px' }}>
+            <button
+              onClick={() => engineRef?.current?.debugSpawnBoss()}
+              style={{ ...btnStyle(neonPink), flex: 1 }}
+              onMouseEnter={(e) => { e.currentTarget.style.background = `${neonPink}20`; }}
+              onMouseLeave={(e) => { e.currentTarget.style.background = `${neonPink}10`; }}
+            >
+              💀 召唤BOSS
+            </button>
+            <button
+              onClick={() => engineRef?.current?.debugMultiplyEnemySpeed(5)}
+              style={{ ...btnStyle(neonBlue), flex: 1 }}
+              onMouseEnter={(e) => { e.currentTarget.style.background = `${neonBlue}20`; }}
+              onMouseLeave={(e) => { e.currentTarget.style.background = `${neonBlue}10`; }}
+            >
+              ⏩ 速度×5
+            </button>
+          </div>
+          <div style={{ display: 'flex', gap: '6px', marginBottom: '6px' }}>
+            <button
+              onClick={() => engineRef?.current?.debugMultiplyEnemySpeed(20)}
+              style={{ ...btnStyle(neonRed), flex: 1 }}
+              onMouseEnter={(e) => { e.currentTarget.style.background = `${neonRed}20`; }}
+              onMouseLeave={(e) => { e.currentTarget.style.background = `${neonRed}10`; }}
+            >
+              ⏩ 速度×20
+            </button>
+            <button
+              onClick={() => engineRef?.current?.debugMultiplyEnemySpeed(1)}
+              style={{ ...btnStyle(neonGreen), flex: 1 }}
+              onMouseEnter={(e) => { e.currentTarget.style.background = `${neonGreen}20`; }}
+              onMouseLeave={(e) => { e.currentTarget.style.background = `${neonGreen}10`; }}
+            >
+              ✅ 速度恢复
+            </button>
+          </div>
+          <div style={{ display: 'flex', gap: '6px' }}>
+            <button
+              onClick={() => engineRef?.current?.debugSetAttacking(false)}
+              style={{ ...btnStyle('#FF6B6B'), flex: 1 }}
+              onMouseEnter={(e) => { e.currentTarget.style.background = `#FF6B6B20`; }}
+              onMouseLeave={(e) => { e.currentTarget.style.background = `#FF6B6B10`; }}
+            >
+              ⏸ 停止攻击
+            </button>
+            <button
+              onClick={() => engineRef?.current?.debugSetAttacking(true)}
+              style={{ ...btnStyle(neonGreen), flex: 1 }}
+              onMouseEnter={(e) => { e.currentTarget.style.background = `${neonGreen}20`; }}
+              onMouseLeave={(e) => { e.currentTarget.style.background = `${neonGreen}10`; }}
+            >
+              ▶ 开始攻击
+            </button>
+          </div>
+        </div>
+
+        {/* 重置游戏 */}
+        <div style={{ marginBottom: '14px' }}>
+          <div style={sectionTitle}>重置游戏</div>
+          <button
+            onClick={() => setShowResetConfirm(true)}
+            style={{ ...btnStyle(neonRed), width: '100%' }}
+            onMouseEnter={(e) => { e.currentTarget.style.background = `${neonRed}20`; }}
+            onMouseLeave={(e) => { e.currentTarget.style.background = `${neonRed}10`; }}
+          >
+            🔄 重置游戏
           </button>
         </div>
 
@@ -849,6 +948,59 @@ const DebugPanel: React.FC<DebugPanelProps> = ({ engineRef }) => {
                 style={{ ...btnStyle(neonYellow), flex: 1 }}
               >
                 保存
+              </button>
+            </div>
+          </div>
+        </div>,
+        document.body
+      )}
+
+      {/* 重置游戏确认弹窗 */}
+      {showResetConfirm && createPortal(
+        <div
+          style={{ ...modalOverlay, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+          onClick={(e) => { if (e.target === e.currentTarget) setShowResetConfirm(false); }}
+        >
+          <div style={{ ...modalBox, width: '280px', height: 'auto', padding: '16px' }}>
+            <div style={modalTitle(neonRed, '⚠ 重置游戏')}>
+              ⚠ 重置游戏
+            </div>
+            <div style={{
+              fontFamily: '"Rajdhani", "Orbitron", monospace',
+              fontSize: '11px',
+              color: '#E0E0FF',
+              textAlign: 'center',
+              marginBottom: '14px',
+              lineHeight: '1.6',
+            }}>
+              将清除所有本地缓存（存档、最高分、<br />
+              离线奖励、批量出售设置等），<br />
+              从头开始游戏。<br />
+              <span style={{ color: neonRed }}>此操作不可撤销！</span>
+            </div>
+            <div style={{ display: 'flex', gap: '8px' }}>
+              <button
+                onClick={() => setShowResetConfirm(false)}
+                style={{ ...btnStyle('#888'), flex: 1, borderColor: '#555', color: '#aaa' }}
+              >
+                取消
+              </button>
+              <button
+                onClick={() => {
+                  setShowResetConfirm(false);
+                  // 清除所有游戏相关缓存
+                  localStorage.removeItem('shotsGameSave');
+                  localStorage.removeItem('shotsGameHighScore');
+                  localStorage.removeItem('batchSellQualities');
+                  localStorage.removeItem('batchSellItemQualities');
+                  localStorage.removeItem('shotsGame_lastOnline');
+                  window.location.reload();
+                }}
+                style={{ ...btnStyle(neonRed), flex: 1 }}
+                onMouseEnter={(e) => { e.currentTarget.style.background = `${neonRed}20`; }}
+                onMouseLeave={(e) => { e.currentTarget.style.background = `${neonRed}10`; }}
+              >
+                确认重置
               </button>
             </div>
           </div>

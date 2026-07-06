@@ -1,11 +1,13 @@
 import { useState, useEffect, useRef } from 'react';
 import { useGameStore } from '../store/gameStore';
+import { getItemDef, getPotionEffectText } from '../game/data/equipment';
 
 interface StatusBarProps {
   onOpenShop?: () => void;
   engineRef?: {
     current: {
       getItemCooldowns?: () => { key: string; remaining: number; duration: number; icon: string; name: string; itemId: string }[];
+      getActivePotionEffects?: () => { key: string; remaining: number; duration: number; icon: string; name: string; itemId: string; isWave: boolean }[];
       calcPower?: () => number;
     } | null;
   };
@@ -16,7 +18,49 @@ export function StatusBar({ onOpenShop, engineRef }: StatusBarProps) {
   const [showStats, setShowStats] = useState(false);
   const [highScore, setHighScore] = useState(0);
   const [itemCooldowns, setItemCooldowns] = useState<{ key: string; remaining: number; duration: number; icon: string; name: string; itemId: string }[]>([]);
+  const [activePotions, setActivePotions] = useState<{ key: string; remaining: number; duration: number; icon: string; name: string; itemId: string; isWave: boolean }[]>([]);
   const flashRef = useRef<Record<string, boolean>>({});
+  // 点击倒计时栏图标后的药水效果弹框
+  const [potionInfo, setPotionInfo] = useState<{ icon: string; name: string; description: string; remaining?: number; duration?: number; isWave: boolean } | null>(null);
+
+  // 点击倒计时栏图标：显示药水效果弹框
+  const handlePotionClick = (item: { key: string; remaining: number; duration: number; icon: string; name: string; itemId: string; isWave: boolean }) => {
+    const itemDef = getItemDef(item.itemId);
+    let description = '';
+    if (itemDef) {
+      if (itemDef.effect === 'skill_potion' && itemDef.potionType) {
+        description = getPotionEffectText(itemDef.potionType, (itemDef as any).potionLevel || player?.level || 1);
+        // 修正定时药水的描述（实际为定时，不是整回合）
+        if (itemDef.potionType === 'laser') description = '获得激光炮效果，持续5秒';
+        if (itemDef.potionType === 'sweep') description = '获得战术横扫效果，持续10秒';
+      } else {
+        // 普通药水使用 ItemDef.description
+        description = itemDef.description || '';
+      }
+    }
+    setPotionInfo({
+      icon: item.icon,
+      name: item.name,
+      description,
+      remaining: item.isWave ? undefined : item.remaining,
+      duration: item.isWave ? undefined : item.duration,
+      isWave: item.isWave,
+    });
+  };
+
+  // 点击屏幕任意位置关闭药水弹框
+  useEffect(() => {
+    if (!potionInfo) return;
+    const handler = () => setPotionInfo(null);
+    // 延迟一帧绑定，避免本次 click 立即触发
+    const id = window.setTimeout(() => {
+      window.addEventListener('click', handler);
+    }, 0);
+    return () => {
+      window.clearTimeout(id);
+      window.removeEventListener('click', handler);
+    };
+  }, [potionInfo]);
 
   useEffect(() => {
     const saved = localStorage.getItem('shotsGameHighScore');
@@ -44,6 +88,9 @@ export function StatusBar({ onOpenShop, engineRef }: StatusBarProps) {
           }
         }
         setItemCooldowns(cds);
+      }
+      if (engineRef?.current?.getActivePotionEffects) {
+        setActivePotions(engineRef.current.getActivePotionEffects());
       }
     }, 50);
     return () => clearInterval(interval);
@@ -114,13 +161,12 @@ export function StatusBar({ onOpenShop, engineRef }: StatusBarProps) {
             {(() => {
               const remaining = gameState.waveEnemiesRemaining;
               const total = gameState.waveEnemiesTotal || 50;
-              const isEliteOrBossWave = gameState.currentWave % 5 === 0;
-              const isBossWave = gameState.currentWave % 8 === 0;
-              // 精英/BOSS已生成且只剩1只时显示来袭文字
-              if (isEliteOrBossWave && remaining === 1) {
+              // 精英/BOSS出场时（showEliteBossNotice）显示来袭文字
+              if (gameState.showEliteBossNotice) {
+                const isBoss = gameState.eliteBossNoticeType === 'boss';
                 return (
-                  <span style={{ ...neonText, fontSize: '8px', color: isBossWave ? '#FF3B3B' : '#FFE600', fontWeight: 700, textShadow: `0 0 4px ${isBossWave ? '#FF3B3B' : '#FFE600'}80` }}>
-                    {isBossWave ? 'BOSS来袭！' : '精英来袭！'}
+                  <span style={{ ...neonText, fontSize: '8px', color: isBoss ? '#FF3B3B' : '#FFE600', fontWeight: 700, textShadow: `0 0 4px ${isBoss ? '#FF3B3B' : '#FFE600'}80` }}>
+                    {isBoss ? 'BOSS来袭！' : '精英来袭！'}
                   </span>
                 );
               }
@@ -222,27 +268,119 @@ export function StatusBar({ onOpenShop, engineRef }: StatusBarProps) {
             </div>
           </div>
 
-          {/* 物品冷却状态栏 */}
-          <div className="flex gap-1.5" style={{ minHeight: '22px' }}>
-            {itemCooldowns.map((item) => {
-              const cdPercent = 1 - item.remaining / item.duration;
+          {/* 药水/技能持续时间倒计时栏（优先显示生效中，其次显示冷却中） */}
+          <div className="flex gap-1.5 flex-wrap relative" style={{ minHeight: '22px' }}>
+            {/* 生效中药水（属性药水整回合显示 + 定时药水显示剩余持续时间） */}
+            {activePotions.map((item) => {
+              const isWave = item.isWave;
+              const cdPercent = isWave ? 0 : (item.duration > 0 ? 1 - item.remaining / item.duration : 0);
               return (
                 <div
                   key={item.key}
-                  className="relative flex items-center justify-center flex-shrink-0"
+                  className="relative flex items-center justify-center flex-shrink-0 cursor-pointer"
                   style={{
                     width: '20px',
                     height: '20px',
                     borderRadius: '4px',
                     background: 'rgba(19, 16, 37, 0.9)',
-                    border: '1px solid rgba(255, 230, 0, 0.4)',
-                    boxShadow: flashRef.current[item.key]
-                      ? `0 0 8px ${neonYellow}, 0 0 15px ${neonYellow}80`
-                      : `0 0 3px ${neonYellow}30`,
+                    border: `1px solid ${isWave ? 'rgba(0, 245, 212, 0.6)' : 'rgba(255, 230, 0, 0.6)'}`,
+                    boxShadow: isWave
+                      ? `0 0 6px ${neonCyan}80, inset 0 0 4px ${neonCyan}40`
+                      : `0 0 5px ${neonYellow}80`,
                     transition: 'box-shadow 0.15s ease-out',
                     overflow: 'hidden',
                   }}
-                  title={`${item.name} (${(item.remaining / 1000).toFixed(1)}s)`}
+                  title={`${item.name} (点击查看效果)`}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    handlePotionClick(item);
+                  }}
+                >
+                  {!isWave && (
+                    <div
+                      className="absolute inset-0"
+                      style={{
+                        background: `conic-gradient(rgba(255,255,255,0.15) ${cdPercent * 360}deg, transparent 0deg)`,
+                      }}
+                    />
+                  )}
+                  {isWave && (
+                    <div
+                      className="absolute inset-0"
+                      style={{
+                        background: `radial-gradient(circle at 50% 50%, ${neonCyan}20 0%, transparent 70%)`,
+                      }}
+                    />
+                  )}
+                  <div
+                    className="absolute inset-0 flex items-center justify-center"
+                    style={{
+                      filter: isWave
+                        ? 'drop-shadow(0 0 2px rgba(0,245,212,0.6))'
+                        : `grayscale(${1 - cdPercent}) brightness(${0.3 + cdPercent * 0.7})`,
+                    }}
+                  >
+                    <span style={{ fontSize: '10px' }}>{item.icon}</span>
+                  </div>
+                  {!isWave && (
+                    <span
+                      style={{
+                        ...neonText,
+                        fontSize: '5px',
+                        color: '#FFFFFF',
+                        position: 'absolute',
+                        bottom: '0.5px',
+                        textShadow: '0 0 2px rgba(0,0,0,0.8)',
+                        lineHeight: 1,
+                      }}
+                    >
+                      {(item.remaining / 1000).toFixed(1)}
+                    </span>
+                  )}
+                  {isWave && (
+                    <span
+                      style={{
+                        fontSize: '7px',
+                        color: neonCyan,
+                        position: 'absolute',
+                        top: '0.5px',
+                        right: '0.5px',
+                        textShadow: '0 0 2px rgba(0,0,0,0.8)',
+                        lineHeight: 1,
+                        fontWeight: 700,
+                      }}
+                    >
+                      ∞
+                    </span>
+                  )}
+                </div>
+              );
+            })}
+            {/* 冷却中药水（弱化显示） */}
+            {itemCooldowns.map((item) => {
+              const cdPercent = 1 - item.remaining / item.duration;
+              return (
+                <div
+                  key={item.key}
+                  className="relative flex items-center justify-center flex-shrink-0 cursor-pointer"
+                  style={{
+                    width: '20px',
+                    height: '20px',
+                    borderRadius: '4px',
+                    background: 'rgba(19, 16, 37, 0.6)',
+                    border: '1px solid rgba(100, 100, 130, 0.3)',
+                    boxShadow: flashRef.current[item.key]
+                      ? `0 0 8px ${neonYellow}, 0 0 15px ${neonYellow}80`
+                      : 'none',
+                    transition: 'box-shadow 0.15s ease-out',
+                    overflow: 'hidden',
+                    opacity: 0.55,
+                  }}
+                  title={`${item.name} 冷却 (${(item.remaining / 1000).toFixed(1)}s)`}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    handlePotionClick({ ...item, isWave: false });
+                  }}
                 >
                   <div
                     className="absolute inset-0"
@@ -253,8 +391,7 @@ export function StatusBar({ onOpenShop, engineRef }: StatusBarProps) {
                   <div
                     className="absolute inset-0 flex items-center justify-center"
                     style={{
-                      filter: `grayscale(${1 - cdPercent}) brightness(${0.3 + cdPercent * 0.7})`,
-                      transition: 'filter 0.1s linear',
+                      filter: `grayscale(1) brightness(${0.3 + cdPercent * 0.4})`,
                     }}
                   >
                     <span style={{ fontSize: '10px' }}>{item.icon}</span>
@@ -263,7 +400,7 @@ export function StatusBar({ onOpenShop, engineRef }: StatusBarProps) {
                     style={{
                       ...neonText,
                       fontSize: '5px',
-                      color: '#FFFFFF',
+                      color: '#8B80A0',
                       position: 'absolute',
                       bottom: '0.5px',
                       textShadow: '0 0 2px rgba(0,0,0,0.8)',
@@ -275,6 +412,104 @@ export function StatusBar({ onOpenShop, engineRef }: StatusBarProps) {
                 </div>
               );
             })}
+            {/* 点击倒计时栏图标后的药水效果弹框（栏下方） */}
+            {potionInfo && (
+              <div
+                className="absolute z-30"
+                style={{
+                  top: '100%',
+                  left: 0,
+                  marginTop: '4px',
+                  background: 'rgba(13, 11, 26, 0.95)',
+                  border: `1px solid ${potionInfo.isWave ? 'rgba(0, 245, 212, 0.5)' : 'rgba(255, 230, 0, 0.5)'}`,
+                  borderRadius: '8px',
+                  boxShadow: `0 0 12px ${potionInfo.isWave ? 'rgba(0, 245, 212, 0.3)' : 'rgba(255, 230, 0, 0.3)'}, 0 4px 12px rgba(0,0,0,0.5)`,
+                  backdropFilter: 'blur(8px)',
+                  padding: '8px 10px',
+                  minWidth: '180px',
+                  maxWidth: '240px',
+                  animation: 'potionInfoIn 0.15s ease-out',
+                  pointerEvents: 'auto',
+                }}
+                onClick={(e) => e.stopPropagation()}
+              >
+                <div className="flex items-center gap-2 mb-1.5">
+                  <span
+                    style={{
+                      fontSize: '18px',
+                      filter: `drop-shadow(0 0 4px ${potionInfo.isWave ? neonCyan : neonYellow}80)`,
+                    }}
+                  >
+                    {potionInfo.icon}
+                  </span>
+                  <span
+                    style={{
+                      ...neonText,
+                      fontSize: '11px',
+                      fontWeight: 700,
+                      color: potionInfo.isWave ? neonCyan : neonYellow,
+                      letterSpacing: '0.5px',
+                      textShadow: `0 0 4px ${potionInfo.isWave ? 'rgba(0,245,212,0.4)' : 'rgba(255,230,0,0.4)'}`,
+                    }}
+                  >
+                    {potionInfo.name}
+                  </span>
+                </div>
+                {potionInfo.description && (
+                  <div
+                    style={{
+                      fontFamily: '"Rajdhani", "Orbitron", monospace',
+                      fontSize: '10px',
+                      color: '#E0E0FF',
+                      lineHeight: 1.4,
+                      marginBottom: potionInfo.isWave || potionInfo.remaining !== undefined ? '4px' : 0,
+                    }}
+                  >
+                    {potionInfo.description}
+                  </div>
+                )}
+                {potionInfo.isWave ? (
+                  <div
+                    style={{
+                      fontFamily: '"Rajdhani", "Orbitron", monospace',
+                      fontSize: '9px',
+                      color: neonCyan,
+                      fontWeight: 600,
+                    }}
+                  >
+                    ∞ 整回合持续
+                  </div>
+                ) : potionInfo.remaining !== undefined && potionInfo.duration !== undefined ? (
+                  <div
+                    style={{
+                      fontFamily: '"Rajdhani", "Orbitron", monospace',
+                      fontSize: '9px',
+                      color: '#8B80A0',
+                      fontWeight: 600,
+                    }}
+                  >
+                    剩余 {(potionInfo.remaining / 1000).toFixed(1)}秒 / {(potionInfo.duration / 1000).toFixed(1)}秒
+                  </div>
+                ) : null}
+                <div
+                  style={{
+                    fontFamily: '"Rajdhani", "Orbitron", monospace',
+                    fontSize: '7px',
+                    color: '#5A5A7A',
+                    marginTop: '4px',
+                    textAlign: 'right',
+                  }}
+                >
+                  点击空白关闭
+                </div>
+                <style>{`
+                  @keyframes potionInfoIn {
+                    0% { opacity: 0; transform: translateY(-4px); }
+                    100% { opacity: 1; transform: translateY(0); }
+                  }
+                `}</style>
+              </div>
+            )}
           </div>
 
           {/* 属性面板 - 显示人物所有属性 */}

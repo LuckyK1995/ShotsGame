@@ -1,3 +1,4 @@
+import React from 'react';
 import type { EquipSlot, EquipRarity } from '../game/types/game';
 
 interface EquipmentIconProps {
@@ -2338,13 +2339,14 @@ function NecklaceIcon({ variant, tint }: { variant: number; tint: string }) {
   return patterns[variant % 5];
 }
 
-export function EquipmentIcon({ slot, rarity, variant, size = 32 }: EquipmentIconProps) {
+const EquipmentIconBase = React.memo(function EquipmentIcon({ slot, rarity, variant, size = 32 }: EquipmentIconProps) {
   const tint = RARITY_TINTS[rarity];
   const glowColor = RARITY_GLOW[rarity];
   const isHighTier = rarity === 'legendary' || rarity === 'epic' || rarity === 'mythic';
   const isMythic = rarity === 'mythic';
 
-  const renderIcon = () => {
+  // 缓存图标主体渲染结果，避免每次重建 50-90 个 Pixel 元素
+  const iconContent = React.useMemo(() => {
     switch (slot) {
       case 'weapon': return <g transform="translate(2, -1)"><WeaponIcon variant={variant} tint={tint} /></g>;
       case 'armor': return <ArmorIcon variant={variant} tint={tint} />;
@@ -2357,41 +2359,18 @@ export function EquipmentIcon({ slot, rarity, variant, size = 32 }: EquipmentIco
       case 'necklace': return <NecklaceIcon variant={variant} tint={tint} />;
       default: return null;
     }
-  };
+  }, [slot, variant, tint]);
 
-  const star = (cx: number, cy: number, rx: number, ry: number) => {
-    const qx = rx * 0.28;
-    const qy = ry * 0.28;
-    return `M${cx},${cy - ry} L${cx + qx},${cy - qy} L${cx + rx},${cy} L${cx + qx},${cy + qy} L${cx},${cy + ry} L${cx - qx},${cy + qy} L${cx - rx},${cy} L${cx - qx},${cy - qy} Z`;
-  };
-
-  return (
-    <>
-      {isMythic && (
-        <style>{`
-          @keyframes mythic-sparkle {
-            0%, 100% { opacity: 0.3; }
-            50% { opacity: 1; }
-          }
-          .mythic-star {
-            animation: mythic-sparkle 2.4s ease-in-out infinite;
-          }
-          .mythic-star-2 { animation-delay: 0.8s; }
-          .mythic-star-3 { animation-delay: 1.6s; }
-        `}</style>
-      )}
-      <svg
-        width={size}
-        height={size}
-        viewBox="0 0 16 16"
-        shapeRendering="crispEdges"
-        overflow="visible"
-        style={{
-          imageRendering: 'pixelated',
-          overflow: 'visible',
-        }}
-      >
-        {renderIcon()}
+  // 缓存装饰元素（高阶发光角点 + mythic 星星）
+  const decoration = React.useMemo(() => {
+    if (!isHighTier && !isMythic) return null;
+    const star = (cx: number, cy: number, rx: number, ry: number) => {
+      const qx = rx * 0.28;
+      const qy = ry * 0.28;
+      return `M${cx},${cy - ry} L${cx + qx},${cy - qy} L${cx + rx},${cy} L${cx + qx},${cy + qy} L${cx},${cy + ry} L${cx - qx},${cy + qy} L${cx - rx},${cy} L${cx - qx},${cy - qy} Z`;
+    };
+    return (
+      <>
         {isHighTier && (
           <>
             <rect x={0} y={0} width={1} height={1} fill={glowColor} opacity={0.9} />
@@ -2402,27 +2381,53 @@ export function EquipmentIcon({ slot, rarity, variant, size = 32 }: EquipmentIco
         )}
         {isMythic && (
           <>
-            <path d={star(3, 4, 2.2, 4.2)} fill="rgba(90, 156, 232, 0.25)" />
-            <path
-              d={star(3, 4, 1.3, 2.8)}
-              fill="#5A9CE8"
-              className="mythic-star mythic-star-1"
-            />
-            <path d={star(6, 14, 3.0, 3.0)} fill="rgba(90, 156, 232, 0.25)" />
-            <path
-              d={star(6, 14, 1.9, 1.9)}
-              fill="#5A9CE8"
-              className="mythic-star mythic-star-2"
-            />
-            <path d={star(14, 8, 4.0, 4.0)} fill="rgba(90, 156, 232, 0.25)" />
-            <path
-              d={star(14, 8, 2.6, 2.6)}
-              fill="#5A9CE8"
-              className="mythic-star mythic-star-3"
-            />
+            <defs>
+              <radialGradient id="mythic-star-grad" cx="50%" cy="50%" r="50%">
+                <stop offset="0%" stopColor="#FFFFFF" stopOpacity="1" />
+                <stop offset="30%" stopColor="#BEE3FF" stopOpacity="1" />
+                <stop offset="70%" stopColor="#5A9CE8" stopOpacity="1" />
+                <stop offset="100%" stopColor="#2A6FB8" stopOpacity="0.9" />
+              </radialGradient>
+              <radialGradient id="mythic-star-glow" cx="50%" cy="50%" r="50%">
+                <stop offset="0%" stopColor="#FFFFFF" stopOpacity="0.9" />
+                <stop offset="40%" stopColor="#5A9CE8" stopOpacity="0.4" />
+                <stop offset="100%" stopColor="#5A9CE8" stopOpacity="0" />
+              </radialGradient>
+            </defs>
+            {/* 左上角星星 */}
+            <circle cx={3} cy={4} r={3.2} fill="url(#mythic-star-glow)" className="mythic-star-glow mythic-star-glow-1" />
+            <path d={star(3, 4, 2.2, 4.2)} fill="rgba(90, 156, 232, 0.3)" />
+            <path d={star(3, 4, 1.3, 2.8)} fill="url(#mythic-star-grad)" className="mythic-star mythic-star-1" />
+            {/* 左下角星星 */}
+            <circle cx={6} cy={14} r={2.6} fill="url(#mythic-star-glow)" className="mythic-star-glow mythic-star-glow-2" />
+            <path d={star(6, 14, 3.0, 3.0)} fill="rgba(90, 156, 232, 0.3)" />
+            <path d={star(6, 14, 1.9, 1.9)} fill="url(#mythic-star-grad)" className="mythic-star mythic-star-2" />
+            {/* 右侧星星 */}
+            <circle cx={14} cy={8} r={3.5} fill="url(#mythic-star-glow)" className="mythic-star-glow mythic-star-glow-3" />
+            <path d={star(14, 8, 4.0, 4.0)} fill="rgba(90, 156, 232, 0.3)" />
+            <path d={star(14, 8, 2.6, 2.6)} fill="url(#mythic-star-grad)" className="mythic-star mythic-star-3" />
           </>
         )}
-      </svg>
-    </>
+      </>
+    );
+  }, [isHighTier, isMythic, glowColor]);
+
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 16 16"
+      shapeRendering="crispEdges"
+      overflow="visible"
+      style={{
+        imageRendering: 'pixelated',
+        overflow: 'visible',
+      }}
+    >
+      {iconContent}
+      {decoration}
+    </svg>
   );
-}
+});
+
+export const EquipmentIcon = EquipmentIconBase;

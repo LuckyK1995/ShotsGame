@@ -15,7 +15,8 @@ export const GameCanvas = forwardRef<GameCanvasHandle>((_, ref) => {
     setEquipment, setEquipmentStorage, setBuffs,
     setActiveSkills, setTalentChoices, setWeather,
     setShowTalentSelection,
-    setCodexEntries, setAchievements, setUnlockedAchievement
+    setCodexEntries, setAchievements, setUnlockedAchievement,
+    addRareDropNotification
   } = useGameStore();
 
   useImperativeHandle(ref, () => ({
@@ -88,6 +89,10 @@ export const GameCanvas = forwardRef<GameCanvasHandle>((_, ref) => {
       setUnlockedAchievement({ ...achievement });
     };
 
+    engine.onRareDrop = (info) => {
+      addRareDropNotification(info);
+    };
+
     setInventory([...engine.inventory]);
     setSkills([...engine.skills]);
     setEquipment([...engine.equipment]);
@@ -140,7 +145,8 @@ export const GameCanvas = forwardRef<GameCanvasHandle>((_, ref) => {
       setEquipment, setEquipmentStorage, setBuffs,
       setActiveSkills, setTalentChoices, setWeather,
       setShowTalentSelection,
-      setCodexEntries, setAchievements, setUnlockedAchievement]);
+      setCodexEntries, setAchievements, setUnlockedAchievement,
+      addRareDropNotification]);
 
   return (
     <div

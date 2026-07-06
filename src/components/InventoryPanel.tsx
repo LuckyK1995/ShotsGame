@@ -1,4 +1,4 @@
-import { useState, useCallback, useMemo, useEffect } from 'react';
+import { useState, useCallback, useMemo, useEffect, useRef } from 'react';
 import { useGameStore } from '../store/gameStore';
 import { ITEMS, RARITY_COLORS, RARITY_BG, RARITY_BG_DARK, RARITY_LABELS, getItemDef } from '../game/data/equipment';
 import type { ItemStack, ItemRarity, EquipRarity } from '../game/types/game';
@@ -24,6 +24,7 @@ interface InventoryPanelProps {
 interface SelectedItem {
   index: number;
   stack: ItemStack;
+  source: 'inventory' | 'hotbar';
 }
 
 const RARITY_ORDER: Record<string, number> = {
@@ -100,11 +101,16 @@ const cardStyle = {
 };
 
 export function InventoryPanel({ engineRef }: InventoryPanelProps) {
-  const { inventory } = useGameStore();
+  const inventory = useGameStore(s => s.inventory);
+  const potionHotbar = useGameStore(s => s.potionHotbar);
+  const setPotionHotbar = useGameStore(s => s.setPotionHotbar);
   const [selectedItem, setSelectedItem] = useState<SelectedItem | null>(null);
   const [sortedInventory, setSortedInventory] = useState<ItemStack[] | null>(null);
   const [sortDesc, setSortDesc] = useState(true);
   const [showSellPicker, setShowSellPicker] = useState(false);
+  const [hotbarToast, setHotbarToast] = useState<string | null>(null);
+  // 物品页签：消耗 / 材料 / 任务材料（按 ItemDef.type 过滤）
+  const [inventoryTab, setInventoryTab] = useState<'consumable' | 'material' | 'quest'>('consumable');
   const [itemCooldowns, setItemCooldowns] = useState<Record<string, { remaining: number; duration: number }>>({});
   const [sellQualities, setSellQualities] = useState<Set<string>>(() => {
     try {
@@ -120,22 +126,47 @@ export function InventoryPanel({ engineRef }: InventoryPanelProps) {
     } catch {}
   }, [sellQualities]);
 
+  const prevCooldownsRef = useRef<string>('');
+
   useEffect(() => {
     const interval = setInterval(() => {
       if (engineRef.current?.getItemCooldowns) {
         const cds = engineRef.current.getItemCooldowns();
+        // 无冷却时跳过更新
+        if (cds.length === 0) {
+          if (prevCooldownsRef.current !== '') {
+            prevCooldownsRef.current = '';
+            setItemCooldowns({});
+          }
+          return;
+        }
         const map: Record<string, { remaining: number; duration: number }> = {};
         for (const cd of cds) {
           map[cd.key] = { remaining: cd.remaining, duration: cd.duration };
         }
-        setItemCooldowns(map);
+        // 内容签名对比，避免无变化时触发重渲染
+        const sig = JSON.stringify(map);
+        if (sig !== prevCooldownsRef.current) {
+          prevCooldownsRef.current = sig;
+          setItemCooldowns(map);
+        }
       }
-    }, 50);
+    }, 250);
     return () => clearInterval(interval);
   }, [engineRef]);
 
   const displaySlots = 200;
-  const displayInventory = sortedInventory ?? inventory;
+  // 按当前页签过滤物品（消耗=consumable，材料=material，任务材料=quest）
+  // 注：当前 ITEMS 数据全部为 consumable，材料/任务材料页签为空，预留扩展
+  const tabFilteredInventory = useMemo(() => {
+    if (inventoryTab === 'consumable') return inventory;
+    if (inventoryTab === 'material') {
+      return inventory.filter(s => getItemDef(s.itemId)?.type === 'material');
+    }
+    // quest：暂用 'enhancement' 类型占位（任务材料系统未实现）
+    return inventory.filter(s => getItemDef(s.itemId)?.type === 'enhancement');
+  }, [inventory, inventoryTab]);
+  const displayInventory = sortedInventory ?? tabFilteredInventory;
   const displayedItems = displayInventory.slice(0, displaySlots);
 
   const neonText = {
@@ -148,8 +179,52 @@ export function InventoryPanel({ engineRef }: InventoryPanelProps) {
     const stack = displayInventory[index];
     if (stack) {
       const realIndex = inventory.indexOf(stack);
-      setSelectedItem({ index: realIndex, stack });
+      setSelectedItem({ index: realIndex, stack, source: 'inventory' });
     }
+  };
+
+  const handleHotbarClick = (index: number) => {
+    const stack = potionHotbar[index];
+    if (stack) {
+      setSelectedItem({ index, stack, source: 'hotbar' });
+    }
+  };
+
+  // 设置快捷栏：找到第一个空位放入药水；满 4 格提示
+  const handleSetToHotbar = () => {
+    if (!selectedItem || selectedItem.source !== 'inventory') return;
+    const itemDef = getItemDef(selectedItem.stack.itemId);
+    if (!itemDef || itemDef.type !== 'consumable') return;
+    const emptyIdx = potionHotbar.findIndex(s => s === null);
+    if (emptyIdx === -1) {
+      setHotbarToast('快捷栏已满');
+      setTimeout(() => setHotbarToast(null), 1500);
+      return;
+    }
+    const next = [...potionHotbar];
+    next[emptyIdx] = { itemId: selectedItem.stack.itemId, count: selectedItem.stack.count };
+    setPotionHotbar(next);
+    setHotbarToast('已设置到快捷栏');
+    setTimeout(() => setHotbarToast(null), 1200);
+    setSelectedItem(null);
+  };
+
+  // 取出快捷栏：清空对应格子（物品仍在物品栏中）
+  const handleRemoveFromHotbar = () => {
+    if (!selectedItem || selectedItem.source !== 'hotbar') return;
+    const next = [...potionHotbar];
+    next[selectedItem.index] = null;
+    setPotionHotbar(next);
+    setSelectedItem(null);
+  };
+
+  // 点击快捷栏格子直接使用药水
+  const handleHotbarUse = (index: number) => {
+    const stack = potionHotbar[index];
+    if (!stack || !engineRef.current) return;
+    const itemDef = getItemDef(stack.itemId);
+    if (!itemDef || itemDef.type !== 'consumable') return;
+    engineRef.current.useItem(stack.itemId);
   };
 
   const handleUseItem = () => {
@@ -158,9 +233,7 @@ export function InventoryPanel({ engineRef }: InventoryPanelProps) {
       if (itemDef?.type === 'consumable') {
         engineRef.current.useItem(selectedItem.stack.itemId);
         setSortedInventory(null);
-        if (selectedItem.stack.count <= 1) {
-          setSelectedItem(null);
-        }
+        setSelectedItem(null);
       }
     }
   };
@@ -239,135 +312,305 @@ export function InventoryPanel({ engineRef }: InventoryPanelProps) {
   };
 
   return (
-    <div className="h-full p-1.5 flex flex-col relative">
-      <div className="flex justify-between items-center mb-1.5 gap-2">
-        <span style={{ ...neonText, fontSize: '9px', color: neonCyan, letterSpacing: '1px' }}>
-          物品栏
-        </span>
-        <span style={{ fontFamily: '"Rajdhani", "Orbitron", monospace', fontSize: '8px', color: '#8B80A0' }}>
-          {inventory.length}/{displaySlots}
-        </span>
-      </div>
-
-      <div className="flex-1 overflow-y-auto pr-0.5">
-        <div className="grid grid-cols-8 gap-1">
-          {displayedItems.map((stack, index) => {
-            const itemDef = getItemDef(stack.itemId);
-            if (!itemDef) return null;
-            const rarity = itemDef.rarity as ItemRarity;
-            const cd = itemDef.duration && itemDef.duration > 0 ? itemCooldowns[itemDef.effect] : null;
-            const cdPercent = cd ? 1 - cd.remaining / cd.duration : 0;
-            const isOnCooldown = cd && cd.remaining > 0;
-
-            return (
-              <div
-                key={`${stack.itemId}-${index}`}
-                className={`aspect-square w-full flex flex-col items-center justify-center cursor-pointer relative overflow-hidden ${
-                  selectedItem?.index === inventory.indexOf(stack) ? 'ring-2 ring-[#00F5D4]' : ''
-                }`}
-                style={itemSlotStyle(rarity)}
-                onClick={() => handleItemClick(index)}
-              >
-                {isOnCooldown && (
-                  <div
-                    className="absolute inset-0"
-                    style={{
-                      background: `conic-gradient(rgba(0,0,0,0.4) ${cdPercent * 360}deg, transparent 0deg)`,
-                      zIndex: 1,
-                    }}
-                  />
-                )}
-                <span
-                  className="text-base relative"
+    <div className="h-full flex relative gap-2">
+      {/* 左列：快捷栏；框水平垂直居中 */}
+      <div className="w-1/3 flex items-center justify-center">
+        <div
+          className="flex flex-col gap-1.5 p-2"
+          style={{
+            background: 'rgba(13, 11, 26, 0.4)',
+            borderRadius: '8px',
+            border: '1px solid rgba(176, 38, 255, 0.1)',
+          }}
+        >
+        <div style={{ ...neonText, fontSize: '9px', color: neonCyan, letterSpacing: '1px' }}>
+          快捷栏
+        </div>
+        <div className="grid grid-cols-2 gap-1">
+            {potionHotbar.map((stack, idx) => {
+              const itemDef = stack ? getItemDef(stack.itemId) : null;
+              const rarity = itemDef?.rarity as ItemRarity | undefined;
+              return (
+                <div
+                  key={`hotbar-${idx}`}
+                  className="flex items-center justify-center cursor-pointer relative overflow-hidden"
                   style={{
-                    filter: isOnCooldown
-                      ? `grayscale(${1 - cdPercent}) brightness(${0.4 + cdPercent * 0.6}) drop-shadow(0 0 4px rgba(255,255,255,0.2))`
-                      : 'drop-shadow(0 0 4px rgba(255,255,255,0.35))',
-                    zIndex: 2,
+                    width: '36px',
+                    height: '36px',
+                    ...(itemDef ? itemSlotStyle(rarity) : emptySlotStyle),
+                  }}
+                  onClick={(e) => {
+                    if (stack) {
+                      e.stopPropagation();
+                      handleHotbarClick(idx);
+                    }
+                  }}
+                  onDoubleClick={(e) => {
+                    if (stack) {
+                      e.stopPropagation();
+                      handleHotbarUse(idx);
+                    }
+                  }}
+                  title={stack ? `${itemDef?.name} (双击使用)` : '空快捷栏'}
+                >
+                  {itemDef && (
+                    <>
+                      <span
+                        className="text-base relative"
+                        style={{
+                          filter: 'drop-shadow(0 0 4px rgba(255,255,255,0.35))',
+                          zIndex: 2,
+                        }}
+                      >
+                        {itemDef.icon}
+                      </span>
+                      {stack.count > 1 && (
+                        <span
+                          className="absolute bottom-0.5 right-0.5 text-[7px] px-1"
+                          style={{
+                            fontFamily: '"Rajdhani", "Orbitron", monospace',
+                            color: '#0D0B1A',
+                            backgroundColor: neonCyan,
+                            borderRadius: '3px',
+                            fontWeight: 700,
+                            zIndex: 3,
+                          }}
+                        >
+                          {stack.count}
+                        </span>
+                      )}
+                    </>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+          {hotbarToast && (
+            <div
+              style={{
+                marginTop: '6px',
+                fontFamily: '"Rajdhani", "Orbitron", monospace',
+                fontSize: '8px',
+                color: hotbarToast.includes('满') ? '#FF6B6B' : neonCyan,
+                textShadow: '0 0 4px rgba(0,0,0,0.6)',
+                textAlign: 'center',
+                lineHeight: 1.2,
+              }}
+            >
+              {hotbarToast}
+            </div>
+          )}
+        </div>
+        </div>
+
+        {/* 竖线分隔符（黄粉渐变，区别于装备栏的紫青配色） */}
+        <div
+          aria-hidden
+          style={{
+            width: '1px',
+            alignSelf: 'stretch',
+            background: 'linear-gradient(to bottom, rgba(255, 230, 0, 0.05), rgba(255, 230, 0, 0.5) 20%, rgba(255, 0, 128, 0.5) 80%, rgba(255, 0, 128, 0.05))',
+            boxShadow: '0 0 4px rgba(255, 230, 0, 0.3)',
+            margin: '0 -1px',
+          }}
+        />
+
+        {/* 右列：页签 + 仓库 + 底部操作栏（与装备栏右列结构一致） */}
+        <div className="flex-1 flex flex-col gap-1.5">
+          {/* 物品页签栏：消耗品 / 材料 / 任务材料 */}
+          <div className="flex gap-1">
+            {([
+              { id: 'consumable', label: '消耗品' },
+              { id: 'material', label: '材料' },
+              { id: 'quest', label: '任务材料' },
+            ] as const).map(tab => {
+              const isActive = inventoryTab === tab.id;
+              return (
+                <button
+                  key={tab.id}
+                  onClick={() => setInventoryTab(tab.id)}
+                  style={{
+                    fontFamily: '"Rajdhani", "Orbitron", monospace',
+                    fontSize: '8px',
+                    fontWeight: 700,
+                    letterSpacing: '0.5px',
+                    color: isActive ? neonCyan : '#5A5A7A',
+                    background: isActive ? 'rgba(0, 245, 212, 0.12)' : 'rgba(19, 16, 37, 0.5)',
+                    border: `1px solid ${isActive ? 'rgba(0, 245, 212, 0.4)' : 'rgba(100, 100, 130, 0.2)'}`,
+                    borderRadius: '6px 6px 0 0',
+                    borderBottom: isActive ? 'none' : `1px solid rgba(100, 100, 130, 0.2)`,
+                    boxShadow: isActive ? `0 0 6px rgba(0, 245, 212, 0.2)` : 'none',
+                    padding: '3px 8px',
+                    cursor: 'pointer',
+                    flex: 1,
+                    transition: 'all 0.15s ease',
                   }}
                 >
-                  {itemDef.icon}
-                </span>
-                {stack.count > 1 && (
-                  <span
-                    className="absolute bottom-0.5 right-0.5 text-[6px] px-1"
-                    style={{
-                      fontFamily: '"Rajdhani", "Orbitron", monospace',
-                      color: '#0D0B1A',
-                      backgroundColor: isOnCooldown ? '#8B80A0' : neonCyan,
-                      borderRadius: '3px',
-                      fontWeight: 700,
-                      zIndex: 3,
-                    }}
-                  >
-                    {stack.count}
-                  </span>
-                )}
-                {isOnCooldown && (
-                  <span
-                    className="absolute"
-                    style={{
-                      fontFamily: '"Rajdhani", "Orbitron", monospace',
-                      fontSize: '7px',
-                      color: '#FFFFFF',
-                      textShadow: '0 0 2px rgba(0,0,0,0.9)',
-                      zIndex: 3,
-                      lineHeight: 1,
-                    }}
-                  >
-                    {(cd.remaining / 1000).toFixed(1)}
-                  </span>
-                )}
-              </div>
-            );
-          })}
-          {Array(Math.max(0, displaySlots - displayedItems.length)).fill(null).map((_, index) => (
-            <div
-              key={`empty-${index}`}
-              className="aspect-square w-full"
-              style={emptySlotStyle}
-            />
-          ))}
-        </div>
-      </div>
+                  {tab.label}
+                </button>
+              );
+            })}
+          </div>
 
-      <div className="flex justify-end gap-2 mt-1.5 pt-1.5" style={{ borderTop: '1px solid rgba(176, 38, 255, 0.15)' }}>
-        <button
-          onClick={handleSort}
-          style={{
-            fontFamily: '"Rajdhani", "Orbitron", monospace',
-            fontSize: '8px',
-            fontWeight: 600,
-            color: neonPurple,
-            background: 'rgba(176, 38, 255, 0.1)',
-            border: '1px solid rgba(176, 38, 255, 0.25)',
-            borderRadius: '6px',
-            boxShadow: '0 0 6px rgba(176, 38, 255, 0.1)',
-            padding: '4px 10px',
-            cursor: 'pointer',
-            minWidth: '60px',
-          }}
-        >
-          整理
-        </button>
-        <button
-          onClick={() => setShowSellPicker(true)}
-          style={{
-            fontFamily: '"Rajdhani", "Orbitron", monospace',
-            fontSize: '8px',
-            fontWeight: 600,
-            color: '#FFD700',
-            background: 'rgba(255, 215, 0, 0.1)',
-            border: '1px solid rgba(255, 215, 0, 0.3)',
-            borderRadius: '6px',
-            boxShadow: '0 0 6px rgba(255, 215, 0, 0.15)',
-            padding: '4px 10px',
-            cursor: 'pointer',
-          }}
-        >
-          批量出售
-        </button>
-      </div>
+          {/* 物品仓库 */}
+          <div
+            className="flex-1 overflow-y-auto p-1.5"
+            style={{
+              background: 'rgba(13, 11, 26, 0.4)',
+              borderRadius: '8px',
+              border: '1px solid rgba(176, 38, 255, 0.1)',
+            }}
+          >
+          <div
+            className="grid gap-1"
+            style={{
+              gridTemplateColumns: 'repeat(5, 36px)',
+              rowGap: '1px',
+              justifyContent: 'space-between',
+            }}
+          >
+            {displayedItems.map((stack, index) => {
+              const itemDef = getItemDef(stack.itemId);
+              if (!itemDef) return null;
+              const rarity = itemDef.rarity as ItemRarity;
+              const cd = itemDef.duration && itemDef.duration > 0 ? itemCooldowns[itemDef.effect] : null;
+              const cdPercent = cd ? 1 - cd.remaining / cd.duration : 0;
+              const isOnCooldown = cd && cd.remaining > 0;
+
+              return (
+                <div
+                  key={`${stack.itemId}-${index}`}
+                  className={`flex flex-col items-center justify-center cursor-pointer relative overflow-hidden ${
+                    selectedItem?.index === inventory.indexOf(stack) && selectedItem?.source === 'inventory' ? 'ring-2 ring-[#00F5D4]' : ''
+                  }`}
+                  style={{
+                    width: '36px',
+                    height: '36px',
+                    ...itemSlotStyle(rarity),
+                  }}
+                  onClick={() => handleItemClick(index)}
+                >
+                  {isOnCooldown && (
+                    <div
+                      className="absolute inset-0"
+                      style={{
+                        background: `conic-gradient(rgba(0,0,0,0.4) ${cdPercent * 360}deg, transparent 0deg)`,
+                        zIndex: 1,
+                      }}
+                    />
+                  )}
+                  <span
+                    className="text-base relative"
+                    style={{
+                      filter: isOnCooldown
+                        ? `grayscale(${1 - cdPercent}) brightness(${0.4 + cdPercent * 0.6}) drop-shadow(0 0 4px rgba(255,255,255,0.2))`
+                        : 'drop-shadow(0 0 4px rgba(255,255,255,0.35))',
+                      zIndex: 2,
+                    }}
+                  >
+                    {itemDef.icon}
+                  </span>
+                  {stack.count > 1 && (
+                    <span
+                      className="absolute bottom-0.5 right-0.5 text-[7px] px-1"
+                      style={{
+                        fontFamily: '"Rajdhani", "Orbitron", monospace',
+                        color: '#0D0B1A',
+                        backgroundColor: isOnCooldown ? '#8B80A0' : neonCyan,
+                        borderRadius: '3px',
+                        fontWeight: 700,
+                        zIndex: 3,
+                      }}
+                    >
+                      {stack.count}
+                    </span>
+                  )}
+                  {isOnCooldown && (
+                    <span
+                      className="absolute"
+                      style={{
+                        fontFamily: '"Rajdhani", "Orbitron", monospace',
+                        fontSize: '7px',
+                        color: '#FFFFFF',
+                        textShadow: '0 0 2px rgba(0,0,0,0.9)',
+                        zIndex: 3,
+                        lineHeight: 1,
+                      }}
+                    >
+                      {(cd.remaining / 1000).toFixed(1)}
+                    </span>
+                  )}
+                </div>
+              );
+            })}
+            {Array(Math.max(0, Math.ceil(displaySlots / 5) * 5 - displayedItems.length)).fill(null).map((_, index) => (
+              <div
+                key={`empty-${index}`}
+                style={{
+                  width: '36px',
+                  height: '36px',
+                  ...emptySlotStyle,
+                }}
+              />
+            ))}
+          </div>
+        </div>
+
+        {/* 底部操作栏：左计数 + 右按钮 */}
+        <div className="flex justify-between items-center gap-2 pt-1" style={{ borderTop: '1px solid rgba(176, 38, 255, 0.15)' }}>
+          {/* 左侧：仓库计数，垂直居中 */}
+          <span
+            style={{
+              fontFamily: '"Rajdhani", "Orbitron", monospace',
+              fontSize: '9px',
+              color: '#8B80A0',
+              fontWeight: 600,
+              letterSpacing: '0.5px',
+              lineHeight: 1,
+            }}
+          >
+            {inventory.length}/{displaySlots}
+          </span>
+          {/* 右侧：操作按钮 */}
+          <div className="flex gap-2">
+            <button
+              onClick={handleSort}
+              style={{
+                fontFamily: '"Rajdhani", "Orbitron", monospace',
+                fontSize: '8px',
+                fontWeight: 600,
+                color: neonPurple,
+                background: 'rgba(176, 38, 255, 0.1)',
+                border: '1px solid rgba(176, 38, 255, 0.25)',
+                borderRadius: '6px',
+                boxShadow: '0 0 6px rgba(176, 38, 255, 0.1)',
+                padding: '4px 8px',
+                cursor: 'pointer',
+                minWidth: '52px',
+              }}
+            >
+              整理
+            </button>
+            <button
+              onClick={() => setShowSellPicker(true)}
+              style={{
+                fontFamily: '"Rajdhani", "Orbitron", monospace',
+                fontSize: '8px',
+                fontWeight: 600,
+                color: '#FFD700',
+                background: 'rgba(255, 215, 0, 0.1)',
+                border: '1px solid rgba(255, 215, 0, 0.3)',
+                borderRadius: '6px',
+                boxShadow: '0 0 6px rgba(255, 215, 0, 0.15)',
+                padding: '4px 8px',
+                cursor: 'pointer',
+              }}
+            >
+              批量出售
+            </button>
+          </div>
+        </div>
+        </div>
 
       {/* 批量出售品质选择弹窗 */}
       {showSellPicker && (
@@ -560,7 +803,31 @@ export function InventoryPanel({ engineRef }: InventoryPanelProps) {
               </p>
             </div>
 
-            <div className="flex gap-2 justify-end">
+            <div className="flex gap-2 justify-end flex-wrap">
+              {/* 仅药水（consumable）显示设置/取出快捷栏按钮 */}
+              {getItemDef(selectedItem.stack.itemId)?.type === 'consumable' && (
+                <button
+                  className="px-3 py-1.5"
+                  style={{
+                    background: selectedItem.source === 'inventory'
+                      ? 'rgba(255, 230, 0, 0.15)'
+                      : 'rgba(255, 107, 107, 0.15)',
+                    border: selectedItem.source === 'inventory'
+                      ? '1px solid rgba(255, 230, 0, 0.4)'
+                      : '1px solid rgba(255, 107, 107, 0.4)',
+                    borderRadius: '6px',
+                    fontFamily: '"Rajdhani", "Orbitron", monospace',
+                    fontSize: '9px',
+                    fontWeight: 700,
+                    color: selectedItem.source === 'inventory' ? neonYellow : '#FF6B6B',
+                    boxShadow: '0 0 6px rgba(255, 230, 0, 0.1)',
+                    cursor: 'pointer',
+                  }}
+                  onClick={selectedItem.source === 'inventory' ? handleSetToHotbar : handleRemoveFromHotbar}
+                >
+                  {selectedItem.source === 'inventory' ? '设置快捷栏' : '取出快捷栏'}
+                </button>
+              )}
               <button
                 className="px-4 py-1.5"
                 style={{
@@ -586,23 +853,25 @@ export function InventoryPanel({ engineRef }: InventoryPanelProps) {
               >
                 使用
               </button>
-              <button
-                className="px-4 py-1.5"
-                style={{
-                  background: 'rgba(255, 45, 85, 0.15)',
-                  border: '1px solid rgba(255, 45, 85, 0.3)',
-                  borderRadius: '6px',
-                  fontFamily: '"Rajdhani", "Orbitron", monospace',
-                  fontSize: '9px',
-                  fontWeight: 700,
-                  color: '#FF2D55',
-                  boxShadow: '0 0 8px rgba(255, 45, 85, 0.1)',
-                  cursor: 'pointer',
-                }}
-                onClick={handleDropItem}
-              >
-                丢弃
-              </button>
+              {selectedItem.source === 'inventory' && (
+                <button
+                  className="px-4 py-1.5"
+                  style={{
+                    background: 'rgba(255, 45, 85, 0.15)',
+                    border: '1px solid rgba(255, 45, 85, 0.3)',
+                    borderRadius: '6px',
+                    fontFamily: '"Rajdhani", "Orbitron", monospace',
+                    fontSize: '9px',
+                    fontWeight: 700,
+                    color: '#FF2D55',
+                    boxShadow: '0 0 8px rgba(255, 45, 85, 0.1)',
+                    cursor: 'pointer',
+                  }}
+                  onClick={handleDropItem}
+                >
+                  丢弃
+                </button>
+              )}
             </div>
           </div>
         </div>

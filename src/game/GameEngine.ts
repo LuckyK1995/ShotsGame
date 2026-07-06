@@ -41,7 +41,7 @@ import {
   getNextId,
 } from './utils';
 import { ENEMY_CONFIGS, NORMAL_ENEMY_TYPES, ELITE_ENEMY_TYPES, BOSS_ENEMY_TYPES } from './data/enemies';
-import { WEAPONS, ARMORS, ITEMS, SKILLS, INITIAL_EQUIPMENT, createEquipment, getQualitySetGroups, getItemDef } from './data/equipment';
+import { WEAPONS, ARMORS, ITEMS, SKILLS, INITIAL_EQUIPMENT, createEquipment, getQualitySetGroups, getItemDef, SLOT_LABELS, RARITY_LABELS } from './data/equipment';
 
 export class GameEngine {
   canvas: HTMLCanvasElement;
@@ -115,6 +115,33 @@ export class GameEngine {
 
   private animFrame: number = 0;
   private muzzleFlashTimer: number = 0;
+  // React 状态同步节流：避免每帧触发重渲染
+  private stateSyncTimer: number = 0;
+  private buffsSignature: string = '';
+  // 碰撞检测复用缓冲区
+  private _nearbyBuf: Enemy[] = [];
+  private _nearbySeen: Set<Enemy> = new Set();
+  // 性能优化：复用 bulletBox 对象，避免每子弹分配
+  private _bulletBox: { x: number; y: number; width: number; height: number } = { x: 0, y: 0, width: 0, height: 0 };
+  // 性能优化：getNearbyEnemies 用版本号标志位代替 Set，避免 Set.has/add 开销
+  private _nearbyFlag: number = 0;
+  // 技能等级缓存 Map（避免每帧 skills.find 线性查找）
+  private skillLevels: Map<string, number> = new Map();
+  private skillsDirty: boolean = true;
+  // setTimeout 句柄跟踪（stop 时统一清理，避免组件卸载后回调仍执行）
+  private pendingTimers: number[] = [];
+
+  private trackTimer(handle: number): number {
+    this.pendingTimers.push(handle);
+    return handle;
+  }
+
+  private clearTrackedTimers(): void {
+    for (const id of this.pendingTimers) {
+      clearTimeout(id);
+    }
+    this.pendingTimers.length = 0;
+  }
 
   private droppedEquipmentMap: Map<string, Equipment> = new Map();
 
@@ -127,6 +154,9 @@ export class GameEngine {
   // 技能药水效果（持续本回合，下回合清除）
   private wavePotionEffects: Record<string, number> = {};
   private wavePotionClone: { active: boolean; level: number } = { active: false, level: 0 };
+  // 定时技能药水（laser/sweep/clone）：按 duration 衰减，到时清除对应状态
+  // 与 wavePotionEffects 区分：属性类药水整回合持续，特效/主动药水按实际技能时长
+  private timedPotionEffects: { type: string; remaining: number; duration: number; icon: string; name: string; itemId: string }[] = [];
 
   // 需求 #8：玩家debuff系统（精英/BOSS对玩家施加）
   private playerDebuffs: { type: 'burn' | 'poison' | 'attackSpeedDown' | 'bulletSpeedDown' | 'rangeDown' | 'stun'; remaining: number; duration: number; value: number; tickTimer: number }[] = [];
@@ -172,6 +202,9 @@ export class GameEngine {
   onCodexChange?: (entries: CodexEntry[]) => void;
   onAchievementUnlock?: (achievement: Achievement) => void;
   onAchievementsChange?: (achievements: Achievement[]) => void;
+  // 高品质掉落（fine/legendary/epic/mythic 装备或物品）通知 UI 显示气泡
+  onRareDrop?: (info: { id: number; rarity: string; name: string; icon: string; kind: 'equipment' | 'item' }) => void;
+  private rareDropIdCounter: number = 0;
 
   private addPlayerBuff(type: string, duration: number, value: number): void {
     const buffDefs: Record<string, { name: string; icon: string; description: string }> = {
@@ -217,7 +250,7 @@ export class GameEngine {
       baseEnemyCount: 11,
       maxEnemyCount: 30,
       eliteWaveInterval: 5,
-      bossWaveInterval: 8,
+      bossWaveInterval: 10,
       spawnZoneWidth: 11,
     };
 
@@ -745,15 +778,23 @@ expToNextLevel: Math.floor(10 + Math.pow(bs.level, 1.7) * 4 + bs.level * 4),
     enemy.id = getNextId();
     enemy.type = config.type;
     enemy.name = config.name;
-    enemy.width = config.width;
-    enemy.height = config.height;
+    // 精英怪和BOSS体型统一为 90×100
+    if (config.type === 'elite' || config.type === 'boss') {
+      enemy.width = 90;
+      enemy.height = 100;
+    } else {
+      enemy.width = config.width;
+      enemy.height = config.height;
+    }
     enemy.maxHealth = Math.floor(config.baseHealth * healthMultiplier);
     enemy.health = enemy.maxHealth;
     // 怪物速度：普通怪+100%，精英/BOSS+200%
     const speedBonus = config.type === 'normal' ? 2.0 : 3.2;
     // 高达移速 = 普通怪物移速的110%（在普通怪速度基础上×1.1）
     const gundamBonus = type === 'gundam' ? 1.1 : 1.0;
-    enemy.baseSpeed = config.baseSpeed * speedMultiplier * speedBonus * gundamBonus;
+    // 精英/BOSS移速 = 普通怪物的95%
+    const eliteBossSpeedMult = config.type === 'elite' || config.type === 'boss' ? 0.95 : 1.0;
+    enemy.baseSpeed = config.baseSpeed * speedMultiplier * speedBonus * gundamBonus * eliteBossSpeedMult;
     enemy.speed = enemy.baseSpeed;
     enemy.damage = Math.floor(config.baseDamage * damageMultiplier);
     enemy.exp = Math.floor(config.baseExp * expMultiplier);
@@ -1173,6 +1214,8 @@ expToNextLevel: Math.floor(10 + Math.pow(bs.level, 1.7) * 4 + bs.level * 4),
     this.gameState.isRunning = true;
     this.gameState.isPaused = false;
     this.lastTime = performance.now();
+    this.rebuildBackgroundCache();
+    this.rebuildCloneSprite();
     this.startWave();
     this.gameLoop();
   }
@@ -1183,6 +1226,7 @@ expToNextLevel: Math.floor(10 + Math.pow(bs.level, 1.7) * 4 + bs.level * 4),
       cancelAnimationFrame(this.animationId);
       this.animationId = null;
     }
+    this.clearTrackedTimers();
   }
 
   pause(): void {
@@ -1303,11 +1347,22 @@ expToNextLevel: Math.floor(10 + Math.pow(bs.level, 1.7) * 4 + bs.level * 4),
     // 更新剩余怪物数
     this.gameState.waveEnemiesRemaining = this.getWaveRemainingCount();
 
-    if (this.onStateChange) {
-      this.onStateChange(this.gameState, this.player);
+    // 节流 React 状态同步：100ms 一次（每秒 10 次，足够 UI 显示）
+    this.stateSyncTimer += dt;
+    if (this.stateSyncTimer >= 0.1) {
+      this.stateSyncTimer = 0;
+      if (this.onStateChange) {
+        this.onStateChange(this.gameState, this.player);
+      }
     }
+
+    // buffs 只在内容变化时同步
     if (this.onBuffsChange) {
-      this.onBuffsChange([...this.buffs]);
+      const sig = this.buffs.map(b => `${b.type}:${b.duration.toFixed(0)}`).join('|');
+      if (sig !== this.buffsSignature) {
+        this.buffsSignature = sig;
+        this.onBuffsChange([...this.buffs]);
+      }
     }
   }
 
@@ -1625,6 +1680,24 @@ expToNextLevel: Math.floor(10 + Math.pow(bs.level, 1.7) * 4 + bs.level * 4),
         delete this.itemCooldowns[key];
       }
     }
+    // 定时技能药水衰减：到时清除对应 active 状态
+    if (this.timedPotionEffects.length > 0) {
+      for (let i = this.timedPotionEffects.length - 1; i >= 0; i--) {
+        const p = this.timedPotionEffects[i];
+        p.remaining = Math.max(0, p.remaining - dtMs);
+        if (p.remaining <= 0) {
+          // 清除对应技能状态
+          if (p.type === 'laser') {
+            this.laserActive = false;
+            this.laserDuration = 0;
+          } else if (p.type === 'sweep') {
+            this.sweepActive = false;
+            this.sweepDuration = 0;
+          }
+          this.timedPotionEffects.splice(i, 1);
+        }
+      }
+    }
   }
 
   private updateDodge(dt: number): void {
@@ -1690,7 +1763,7 @@ expToNextLevel: Math.floor(10 + Math.pow(bs.level, 1.7) * 4 + bs.level * 4),
   }
 
   private getCloneCount(): number {
-    const cloneLvl = this.skills.find(s => s.id === 'clone_1')?.level || 0;
+    const cloneLvl = this.getSkillLevel('clone_1');
     const potionBonus = this.wavePotionClone.active ? this.wavePotionClone.level : 0;
     return Math.min(cloneLvl + potionBonus, 4);
   }
@@ -1718,6 +1791,8 @@ expToNextLevel: Math.floor(10 + Math.pow(bs.level, 1.7) * 4 + bs.level * 4),
   private updateClones(dt: number): void {
     const cloneCount = this.getCloneCount();
     if (cloneCount <= 0) return;
+    // 调试模式：禁止分身攻击时只移动不射击
+    if (this.debugNoAttack) return;
 
     while (this.cloneShootTimers.length < cloneCount) {
       this.cloneShootTimers.push(0);
@@ -1745,8 +1820,8 @@ expToNextLevel: Math.floor(10 + Math.pow(bs.level, 1.7) * 4 + bs.level * 4),
       this.cloneShockCooldowns.pop();
     }
 
-    const cloneBulletLvl = this.skills.find(s => s.id === 'clone_bullet_1')?.level || 0;
-    const cloneSyncLvl = this.skills.find(s => s.id === 'clone_sync_1')?.level || 0;
+    const cloneBulletLvl = this.getSkillLevel('clone_bullet_1');
+    const cloneSyncLvl = this.getSkillLevel('clone_sync_1');
 
     const attackSpeedBonus = this.getBuffValue('attack_speed') / 100;
     // 攻速统一概念：基础1.0=1000ms间隔，上限2.5=400ms最小间隔
@@ -1766,11 +1841,11 @@ expToNextLevel: Math.floor(10 + Math.pow(bs.level, 1.7) * 4 + bs.level * 4),
     const sortedEnemies = allRightEnemies.filter(e => (e.x - this.player.x) <= cloneEffectiveRange);
     const positions = this.getClonePositions();
 
-    const fxBombLvl = this.skills.find(s => s.id === 'fx_bomb_1')?.level || 0;
-    const fxBurnLvl = this.skills.find(s => s.id === 'fx_burn_1')?.level || 0;
-    const fxFreezeLvl = this.skills.find(s => s.id === 'fx_freeze_1')?.level || 0;
-    const fxPoisonLvl = this.skills.find(s => s.id === 'fx_poison_1')?.level || 0;
-    const fxCloneShockLvl = this.skills.find(s => s.id === 'fx_clone_shock_1')?.level || 0;
+    const fxBombLvl = this.getSkillLevel('fx_bomb_1');
+    const fxBurnLvl = this.getSkillLevel('fx_burn_1');
+    const fxFreezeLvl = this.getSkillLevel('fx_freeze_1');
+    const fxPoisonLvl = this.getSkillLevel('fx_poison_1');
+    const fxCloneShockLvl = this.getSkillLevel('fx_clone_shock_1');
 
     const dtMs = dt * 1000;
     const cloneDamage = Math.floor(this.player.attack * 0.5);
@@ -1927,7 +2002,7 @@ expToNextLevel: Math.floor(10 + Math.pow(bs.level, 1.7) * 4 + bs.level * 4),
         this.cloneShootTimers[i] = cloneShootInterval;
       }
 
-      const cloneGrenadeLvl = this.skills.find(s => s.id === 'fx_clone_grenade_1')?.level || 0;
+      const cloneGrenadeLvl = this.getSkillLevel('fx_clone_grenade_1');
       if (cloneGrenadeLvl > 0 && sortedEnemies.length > 0) {
         this.cloneGrenadeCooldowns[i] -= dtMs;
         if (this.cloneGrenadeCooldowns[i] <= 0) {
@@ -1938,11 +2013,11 @@ expToNextLevel: Math.floor(10 + Math.pow(bs.level, 1.7) * 4 + bs.level * 4),
           if (this.sweepActive) count *= 2;
           for (let j = 0; j < count; j++) {
             const gIdx = j;
-            setTimeout(() => {
+            this.trackTimer(setTimeout(() => {
               if (this.gameState.isRunning && !this.gameState.isPaused && !this.gameState.isGameOver) {
                 this.fireGrenade(gX, gY, true, i, gIdx, i);
               }
-            }, j * 120);
+            }, j * 120) as unknown as number);
           }
           this.cloneGrenadeCooldowns[i] = 1000;
         }
@@ -1988,12 +2063,7 @@ expToNextLevel: Math.floor(10 + Math.pow(bs.level, 1.7) * 4 + bs.level * 4),
         this.laserActive = false;
       }
     }
-    if (this.wavePotionEffects['laser']) {
-      if (!this.laserActive) {
-        this.laserActive = true;
-        this.laserDuration = 5000;
-      }
-    }
+    // laser 药水：通过 timedPotionEffects 维护，到时自动关闭 laserActive
 
     const cloneCount = this.getCloneCount();
     if (cloneCount > 0) {
@@ -2071,25 +2141,6 @@ expToNextLevel: Math.floor(10 + Math.pow(bs.level, 1.7) * 4 + bs.level * 4),
     }
 
     const wave = this.gameState.currentWave;
-    const isEliteOrBossWave = wave % this.config.eliteWaveInterval === 0;
-
-    if (this.gameState.eliteBossPending) {
-      this.gameState.eliteBossSpawnTimer -= dtMs;
-      if (this.gameState.eliteBossSpawnTimer <= 2000 && !this.gameState.showEliteBossNotice) {
-        this.gameState.showEliteBossNotice = true;
-        this.gameState.eliteBossNoticeTimer = 2000;
-      }
-      if (this.gameState.eliteBossSpawnTimer <= 0) {
-        if (this.gameState.eliteBossNoticeType === 'boss') {
-          this.spawnBoss();
-        } else {
-          this.spawnElite();
-        }
-        this.gameState.eliteBossPending = false;
-        this.eliteBossSpawnedThisWave = true;
-      }
-      return;
-    }
 
     const waveEnemyCount = this.getWaveEnemyCount();
 
@@ -2106,48 +2157,36 @@ expToNextLevel: Math.floor(10 + Math.pow(bs.level, 1.7) * 4 + bs.level * 4),
       this.gameState.waveEnemiesSpawned >= this.getWaveEnemyCount() &&
       activeEnemies === 0
     ) {
-      if (isEliteOrBossWave && !this.eliteBossSpawnedThisWave) {
-        this.gameState.eliteBossPending = true;
-        this.gameState.eliteBossSpawnTimer = 3000;
-        this.gameState.eliteBossNoticeType = wave % this.config.bossWaveInterval === 0 ? 'boss' : 'elite';
-        this.gameState.showEliteBossNotice = false;
-      } else {
-        this.endWave();
-      }
+      this.endWave();
     }
   }
 
   private getWaveEnemyCount(): number {
-    const wave = this.gameState.currentWave;
-    const isEliteOrBossWave = wave % this.config.eliteWaveInterval === 0;
-    // 精英/BOSS关49只小怪+1只精英/BOSS=50，普通关50只
-    return isEliteOrBossWave ? 49 : 50;
+    // 所有波次均为50只（精英/BOSS波中第50只为精英/BOSS，与普通怪同时在场）
+    return 50;
   }
 
-  // 获取当前波次总怪物数（含精英/BOSS）
+  // 获取当前波次总怪物数（精英/BOSS作为第50只与普通怪同时在场）
   private getWaveTotalCount(): number {
-    const wave = this.gameState.currentWave;
-    const isEliteOrBossWave = wave % this.config.eliteWaveInterval === 0;
-    return this.getWaveEnemyCount() + (isEliteOrBossWave ? 1 : 0);
+    return this.getWaveEnemyCount();
   }
 
   // 获取当前剩余怪物数
   private getWaveRemainingCount(): number {
-    const isEliteOrBossWave = this.gameState.currentWave % this.config.eliteWaveInterval === 0;
-    // 待生成的小怪 + 当前活动怪物
+    // 待生成的怪物 + 当前活动怪物（精英/BOSS已计入waveEnemiesSpawned）
     const unspawned = Math.max(0, this.getWaveEnemyCount() - this.gameState.waveEnemiesSpawned);
     const active = this.enemyPool.getActive().filter(e => e.active && !(e as any).isSandbag).length;
-    let remaining = unspawned + active;
-    // 精英/BOSS还未生成
-    if (isEliteOrBossWave && !this.eliteBossSpawnedThisWave) {
-      remaining += 1;
-    }
-    return remaining;
+    return unspawned + active;
   }
 
   private startWave(): void {
     this.wavePotionEffects = {};
     this.wavePotionClone = { active: false, level: 0 };
+    this.timedPotionEffects = [];
+    this.laserActive = false;
+    this.laserDuration = 0;
+    this.sweepActive = false;
+    this.sweepDuration = 0;
     this.calculatePlayerStats();
     this.gameState.currentWave++;
     this.gameState.waveEnemiesSpawned = 0;
@@ -2209,6 +2248,24 @@ expToNextLevel: Math.floor(10 + Math.pow(bs.level, 1.7) * 4 + bs.level * 4),
   private spawnEnemy(): void {
     const wave = this.gameState.currentWave;
     const spawnIndex = this.gameState.waveEnemiesSpawned + 1; // 当前刷出的第几只（从1开始）
+    const isEliteOrBossWave = wave % this.config.eliteWaveInterval === 0;
+    const isBossWave = wave % this.config.bossWaveInterval === 0;
+
+    // 精英/BOSS波第50只：生成精英或BOSS（与普通怪同时在场）
+    if (isEliteOrBossWave && spawnIndex === 50) {
+      if (isBossWave) {
+        this.spawnBoss();
+      } else {
+        this.spawnElite();
+      }
+      // 出场时显示通知（持续2秒后自动消失）
+      this.gameState.eliteBossNoticeType = isBossWave ? 'boss' : 'elite';
+      this.gameState.showEliteBossNotice = true;
+      this.gameState.eliteBossNoticeTimer = 2000;
+      this.eliteBossSpawnedThisWave = true;
+      this.gameState.waveEnemiesSpawned++;
+      return;
+    }
 
     // 第11波起，每波第24只刷高达，第29只刷异形
     if (wave >= 11) {
@@ -2246,6 +2303,78 @@ expToNextLevel: Math.floor(10 + Math.pow(bs.level, 1.7) * 4 + bs.level * 4),
     this.gameState.waveEnemiesSpawned++;
   }
 
+  // 调试用：直接召唤精英怪（不影响波次计数）
+  debugSpawnElite(): void {
+    const wave = this.gameState.currentWave;
+    const idx = Math.min(Math.floor(wave / 10), ELITE_ENEMY_TYPES.length - 1);
+    const type = ELITE_ENEMY_TYPES[idx];
+    this.enemyPool.acquire(type, wave);
+    // 显示"精英来袭！"通知
+    this.gameState.eliteBossNoticeType = 'elite';
+    this.gameState.showEliteBossNotice = true;
+    this.gameState.eliteBossNoticeTimer = 2000;
+  }
+
+  // 调试用：直接召唤BOSS
+  debugSpawnBoss(): void {
+    const wave = this.gameState.currentWave;
+    const idx = Math.min(Math.floor(wave / 20), BOSS_ENEMY_TYPES.length - 1);
+    const type = BOSS_ENEMY_TYPES[idx];
+    const boss = this.enemyPool.acquire(type, wave) as Enemy;
+    this.gameState.bossActive = true;
+    this.gameState.bossHealth = boss.health;
+    this.gameState.bossMaxHealth = boss.maxHealth;
+    this.gameState.bossName = boss.name;
+    // 显示"BOSS来袭！"通知
+    this.gameState.eliteBossNoticeType = 'boss';
+    this.gameState.showEliteBossNotice = true;
+    this.gameState.eliteBossNoticeTimer = 2000;
+    if (this.onBossSpawn) {
+      this.onBossSpawn(boss.name, boss.health, boss.maxHealth);
+    }
+  }
+
+  // 调试用：跳关（当前波+amount，并立即开始新一波）
+  debugSkipWaves(amount: number): void {
+    this.gameState.currentWave += amount;
+    this.gameState.waveEnemiesSpawned = 0;
+    this.gameState.waveEnemiesRemaining = this.getWaveTotalCount();
+    this.gameState.waveEnemiesTotal = this.getWaveTotalCount();
+    this.gameState.waveSpawnTimer = 800;
+    this.gameState.waveInterval = Math.max(800, 1200 - this.gameState.currentWave * 30);
+    this.gameState.betweenWaves = false;
+    this.gameState.showWaveNotice = true;
+    this.gameState.waveNoticeTimer = 2000;
+    this.eliteBossSpawnedThisWave = false;
+    // 清空当前场上所有非沙袋怪物
+    const actives = this.enemyPool.getActive();
+    for (const e of actives) {
+      if (!(e as any).isSandbag && !(e as any).isMonsterSandbag) {
+        this.enemyPool.release(e);
+      }
+    }
+    if (this.onWaveChange) {
+      this.onWaveChange(this.gameState.currentWave);
+    }
+  }
+
+  // 调试用：调整所有活动怪物速度倍数
+  debugMultiplyEnemySpeed(multiplier: number): void {
+    const actives = this.enemyPool.getActive();
+    for (const e of actives) {
+      if ((e as any).isSandbag || (e as any).isMonsterSandbag) continue;
+      e.speed = e.baseSpeed * multiplier;
+    }
+  }
+
+  // 调试用：人物/分身停止或开始攻击
+  debugSetAttacking(enabled: boolean): void {
+    this.debugNoAttack = !enabled;
+  }
+
+  // 调试用：标记是否禁止人物/分身攻击
+  private debugNoAttack: boolean = false;
+
   private spawnBoss(): void {
     const wave = this.gameState.currentWave;
     const idx = Math.min(Math.floor(wave / 20), BOSS_ENEMY_TYPES.length - 1);
@@ -2261,6 +2390,8 @@ expToNextLevel: Math.floor(10 + Math.pow(bs.level, 1.7) * 4 + bs.level * 4),
   }
 
   private updateShooting(dt: number): void {
+    // 调试模式：禁止人物/分身攻击时直接跳过射击逻辑
+    if (this.debugNoAttack) return;
     const dtMs = dt * 1000;
     const enemies = this.enemyPool.getActive();
 
@@ -2311,9 +2442,7 @@ expToNextLevel: Math.floor(10 + Math.pow(bs.level, 1.7) * 4 + bs.level * 4),
         this.sweepActive = false;
       }
     }
-    if (this.wavePotionEffects['sweep']) {
-      this.sweepActive = true;
-    }
+    // sweep 药水：通过 timedPotionEffects 维护，到时自动关闭 sweepActive
 
     if (targetInRange) {
       this.autoShootTimer -= dtMs;
@@ -2340,11 +2469,11 @@ expToNextLevel: Math.floor(10 + Math.pow(bs.level, 1.7) * 4 + bs.level * 4),
           }
           // 特效子弹
           if (this.burstAngles.length > 0) {
-            const fxBombLvl = this.skills.find(s => s.id === 'fx_bomb_1')?.level || 0;
-            const fxBurnLvl = this.skills.find(s => s.id === 'fx_burn_1')?.level || 0;
-            const fxFreezeLvl = this.skills.find(s => s.id === 'fx_freeze_1')?.level || 0;
-            const fxPoisonLvl = this.skills.find(s => s.id === 'fx_poison_1')?.level || 0;
-            const fxShockLvl = this.skills.find(s => s.id === 'fx_shock_1')?.level || 0;
+            const fxBombLvl = this.getSkillLevel('fx_bomb_1');
+            const fxBurnLvl = this.getSkillLevel('fx_burn_1');
+            const fxFreezeLvl = this.getSkillLevel('fx_freeze_1');
+            const fxPoisonLvl = this.getSkillLevel('fx_poison_1');
+            const fxShockLvl = this.getSkillLevel('fx_shock_1');
             const baseSpeed = 500;
             const forceAll = this.sweepActive;
             const mainAngle = this.burstAngles[0];
@@ -2377,7 +2506,7 @@ expToNextLevel: Math.floor(10 + Math.pow(bs.level, 1.7) * 4 + bs.level * 4),
       this.manualShootCooldown -= dtMs;
     }
 
-    const grenadeLvl = this.skills.find(s => s.id === 'fx_grenade_1')?.level || 0;
+    const grenadeLvl = this.getSkillLevel('fx_grenade_1');
     if (grenadeLvl > 0 && targetInRange) {
       this.grenadeCooldown -= dtMs;
       if (this.grenadeCooldown <= 0) {
@@ -2389,11 +2518,11 @@ expToNextLevel: Math.floor(10 + Math.pow(bs.level, 1.7) * 4 + bs.level * 4),
         if (this.sweepActive) count *= 2;
         for (let i = 0; i < count; i++) {
           const gIdx = i;
-          setTimeout(() => {
+          this.trackTimer(setTimeout(() => {
             if (this.gameState.isRunning && !this.gameState.isPaused && !this.gameState.isGameOver) {
               this.fireGrenade(grenadeX, grenadeY, false, 0, gIdx);
             }
-          }, i * 150);
+          }, i * 150) as unknown as number);
         }
         this.grenadeCooldown = 1000;
       }
@@ -2427,13 +2556,13 @@ expToNextLevel: Math.floor(10 + Math.pow(bs.level, 1.7) * 4 + bs.level * 4),
     const bulletY = this.player.y + 5.5 * px + 1 * px;
     const bulletX = this.player.x + 13.5 * px + 16 * px;
 
-    const fxBulletLvl = this.skills.find(s => s.id === 'fx_bullet_1')?.level || 0;
-    const fxSyncLvl = this.skills.find(s => s.id === 'fx_sync_1')?.level || 0;
-    const fxBombLvl = this.skills.find(s => s.id === 'fx_bomb_1')?.level || 0;
-    const fxBurnLvl = this.skills.find(s => s.id === 'fx_burn_1')?.level || 0;
-    const fxFreezeLvl = this.skills.find(s => s.id === 'fx_freeze_1')?.level || 0;
-    const fxPoisonLvl = this.skills.find(s => s.id === 'fx_poison_1')?.level || 0;
-    const fxShockLvl = this.skills.find(s => s.id === 'fx_shock_1')?.level || 0;
+    const fxBulletLvl = this.getSkillLevel('fx_bullet_1');
+    const fxSyncLvl = this.getSkillLevel('fx_sync_1');
+    const fxBombLvl = this.getSkillLevel('fx_bomb_1');
+    const fxBurnLvl = this.getSkillLevel('fx_burn_1');
+    const fxFreezeLvl = this.getSkillLevel('fx_freeze_1');
+    const fxPoisonLvl = this.getSkillLevel('fx_poison_1');
+    const fxShockLvl = this.getSkillLevel('fx_shock_1');
 
     const getTargetAngle = (targetEnemy: Enemy | undefined, baseY: number, baseX: number): number => {
       if (!targetEnemy) return 0;
@@ -2617,8 +2746,10 @@ expToNextLevel: Math.floor(10 + Math.pow(bs.level, 1.7) * 4 + bs.level * 4),
             }
           }
           // 落地粒子特效
-          for (let i = 0; i < 8; i++) {
-            this.particlePool.acquire(bulletAny.targetX, bulletAny.targetY, i % 2 === 0 ? '#9B59B6' : '#C39BD3');
+          if (this.particlePool.canAcquire()) {
+            for (let i = 0; i < 8; i++) {
+              this.particlePool.acquire(bulletAny.targetX, bulletAny.targetY, i % 2 === 0 ? '#9B59B6' : '#C39BD3');
+            }
           }
           this.bulletPool.release(bullet);
           continue;
@@ -2790,12 +2921,14 @@ expToNextLevel: Math.floor(10 + Math.pow(bs.level, 1.7) * 4 + bs.level * 4),
           const effect = this.debuffEffects[debuffType];
           if (effect && effect.particleColor) {
             const particleCount = effect.particleCount || (isFrozen && debuffType === 'freeze' ? 2 : 1);
-            for (let p = 0; p < particleCount; p++) {
-              this.particlePool.acquire(
-                enemy.x + enemy.width / 2 + randomRange(-8, 8),
-                enemy.y + randomRange(5, enemy.height - 5),
-                effect.particleColor
-              );
+            if (this.particlePool.canAcquire()) {
+              for (let p = 0; p < particleCount; p++) {
+                this.particlePool.acquire(
+                  enemy.x + enemy.width / 2 + randomRange(-8, 8),
+                  enemy.y + randomRange(5, enemy.height - 5),
+                  effect.particleColor
+                );
+              }
             }
           }
         }
@@ -2946,17 +3079,24 @@ expToNextLevel: Math.floor(10 + Math.pow(bs.level, 1.7) * 4 + bs.level * 4),
     }
 
     // === 爆炸特效 ===
-    // 第一层：火球中心 - 大量橙红色火花
-    for (let i = 0; i < 24; i++) {
-      this.particlePool.acquire(cx, cy, i % 3 === 0 ? '#FFFFFF' : i % 3 === 1 ? '#FF6600' : '#FFAA00');
-    }
-    // 第二层：冲击波 - 黄色高速粒子向外飞散
-    for (let i = 0; i < 16; i++) {
-      this.particlePool.acquire(cx, cy, '#FFDD44');
-    }
-    // 第三层：烟雾 - 暗红色慢速粒子
-    for (let i = 0; i < 10; i++) {
-      this.particlePool.acquire(cx, cy, '#CC2200');
+    // 性能优化：池满时跳过新粒子，避免覆盖活跃对象
+    if (this.particlePool.canAcquire()) {
+      // 第一层：火球中心 - 大量橙红色火花
+      for (let i = 0; i < 24; i++) {
+        this.particlePool.acquire(cx, cy, i % 3 === 0 ? '#FFFFFF' : i % 3 === 1 ? '#FF6600' : '#FFAA00');
+      }
+      if (this.particlePool.canAcquire()) {
+        // 第二层：冲击波 - 黄色高速粒子向外飞散
+        for (let i = 0; i < 16; i++) {
+          this.particlePool.acquire(cx, cy, '#FFDD44');
+        }
+      }
+      if (this.particlePool.canAcquire()) {
+        // 第三层：烟雾 - 暗红色慢速粒子
+        for (let i = 0; i < 10; i++) {
+          this.particlePool.acquire(cx, cy, '#CC2200');
+        }
+      }
     }
 
     // 强烈屏幕震动
@@ -2979,11 +3119,11 @@ expToNextLevel: Math.floor(10 + Math.pow(bs.level, 1.7) * 4 + bs.level * 4),
       case 1:
         const chargeSpeed = boss.baseSpeed * 2.5;
         boss.speed = chargeSpeed;
-        setTimeout(() => {
+        this.trackTimer(setTimeout(() => {
           if (boss.active) {
             boss.speed = boss.baseSpeed;
           }
-        }, 1500);
+        }, 1500) as unknown as number);
         break;
       case 2:
         this.applyEnemyDebuff('poison', Math.floor(boss.damage * 0.3), 3000);
@@ -3343,6 +3483,7 @@ expToNextLevel: Math.floor(10 + Math.pow(bs.level, 1.7) * 4 + bs.level * 4),
     }
     this.player.skillPoints -= skill.cost;
     skill.level++;
+    this.skillsDirty = true;
     this.calculatePlayerStats();
     if (this.onSkillsChange) {
       this.onSkillsChange(this.skills);
@@ -3351,6 +3492,18 @@ expToNextLevel: Math.floor(10 + Math.pow(bs.level, 1.7) * 4 + bs.level * 4),
       this.onPlayerChange(this.player);
     }
     return true;
+  }
+
+  // 获取技能等级（O(1) Map 查找，热路径专用）
+  private getSkillLevel(id: string): number {
+    if (this.skillsDirty) {
+      this.skillLevels.clear();
+      for (const s of this.skills) {
+        this.skillLevels.set(s.id, s.level);
+      }
+      this.skillsDirty = false;
+    }
+    return this.skillLevels.get(id) || 0;
   }
 
   downgradeSkill(skillId: string): boolean {
@@ -3366,6 +3519,7 @@ expToNextLevel: Math.floor(10 + Math.pow(bs.level, 1.7) * 4 + bs.level * 4),
     }
     skill.level--;
     this.player.skillPoints += skill.cost;
+    this.skillsDirty = true;
     this.calculatePlayerStats();
     if (this.onSkillsChange) {
       this.onSkillsChange(this.skills);
@@ -3386,6 +3540,7 @@ expToNextLevel: Math.floor(10 + Math.pow(bs.level, 1.7) * 4 + bs.level * 4),
       }
     }
     this.player.skillPoints += refunded;
+    this.skillsDirty = true;
     this.calculatePlayerStats();
     if (this.onSkillsChange) {
       this.onSkillsChange(this.skills);
@@ -3451,8 +3606,10 @@ expToNextLevel: Math.floor(10 + Math.pow(bs.level, 1.7) * 4 + bs.level * 4),
   }
 
   private getNearbyEnemies(x: number, y: number, w: number, h: number): Enemy[] {
-    const result: Enemy[] = [];
-    const seen = new Set<Enemy>();
+    // 性能优化：用版本号标志位代替 Set，避免每子弹 Set.has/add 开销
+    const result = this._nearbyBuf;
+    result.length = 0;
+    const flag = ++this._nearbyFlag;
     const minCx = Math.floor(x / this.gridCellSize);
     const maxCx = Math.floor((x + w) / this.gridCellSize);
     const minCy = Math.floor(y / this.gridCellSize);
@@ -3461,9 +3618,11 @@ expToNextLevel: Math.floor(10 + Math.pow(bs.level, 1.7) * 4 + bs.level * 4),
       for (let cy = minCy; cy <= maxCy; cy++) {
         const cell = this.enemyGrid.get(cx * 10000 + cy);
         if (cell) {
-          for (const e of cell) {
-            if (!seen.has(e)) {
-              seen.add(e);
+          for (let i = 0; i < cell.length; i++) {
+            const e = cell[i];
+            const ef = (e as any).__nearbyFlag as number | undefined;
+            if (ef !== flag) {
+              (e as any).__nearbyFlag = flag;
               result.push(e);
             }
           }
@@ -3481,6 +3640,9 @@ expToNextLevel: Math.floor(10 + Math.pow(bs.level, 1.7) * 4 + bs.level * 4),
     // 构建空间网格
     this.buildEnemyGrid();
 
+    // 性能优化：复用 bulletBox 对象，避免每子弹分配
+    const bulletBox = this._bulletBox;
+
     for (const bullet of bullets) {
       if (!bullet.active) continue;
       const bulletAny = bullet as any;
@@ -3493,14 +3655,22 @@ expToNextLevel: Math.floor(10 + Math.pow(bs.level, 1.7) * 4 + bs.level * 4),
 
       const bx = bullet.x - bullet.width / 2;
       const by = bullet.y - bullet.height / 2;
-      const bulletBox = { x: bx, y: by, width: bullet.width, height: bullet.height };
+      // 复用 bulletBox，避免每子弹分配对象
+      bulletBox.x = bx;
+      bulletBox.y = by;
+      bulletBox.width = bullet.width;
+      bulletBox.height = bullet.height;
 
       // 只检查附近网格中的敌人
       const nearby = this.getNearbyEnemies(bx, by, bullet.width, bullet.height);
       for (const enemy of nearby) {
         if (!enemy.active) continue;
 
-        if (checkCollision(bulletBox, enemy)) {
+        // 内联 AABB 检测，避免函数调用开销
+        if (bulletBox.x < enemy.x + enemy.width &&
+            bulletBox.x + bulletBox.width > enemy.x &&
+            bulletBox.y < enemy.y + enemy.height &&
+            bulletBox.y + bulletBox.height > enemy.y) {
           this.damageEnemy(enemy, bullet.damage, undefined, false, bulletAny);
           hitEnemy = enemy;
           hitCount++;
@@ -3570,19 +3740,21 @@ expToNextLevel: Math.floor(10 + Math.pow(bs.level, 1.7) * 4 + bs.level * 4),
           this.damageEnemy(candidates[i].enemy, chainDamage, undefined, true);
           // 电击视觉效果：感电粒子
           const ce = candidates[i].enemy;
-          for (let p = 0; p < 4; p++) {
-            this.particlePool.acquire(
-              ce.x + ce.width / 2 + randomRange(-8, 8),
-              ce.y + ce.height / 2 + randomRange(-8, 8),
-              '#00DDFF'
-            );
+          if (this.particlePool.canAcquire()) {
+            for (let p = 0; p < 4; p++) {
+              this.particlePool.acquire(
+                ce.x + ce.width / 2 + randomRange(-8, 8),
+                ce.y + ce.height / 2 + randomRange(-8, 8),
+                '#00DDFF'
+              );
+            }
           }
         }
       }
     }
 
     if (this.laserActive && this.laserDamageReady) {
-      const laserLvl = this.skills.find(s => s.id === 'fx_laser_1')?.level || 1;
+      const laserLvl = this.getSkillLevel('fx_laser_1') || 1;
       const enemies = this.enemyPool.getActive();
       for (const enemy of enemies) {
         if (enemy.x < this.config.canvasWidth && enemy.x > this.player.x) {
@@ -3599,7 +3771,7 @@ expToNextLevel: Math.floor(10 + Math.pow(bs.level, 1.7) * 4 + bs.level * 4),
         this.cloneLaserDamageTimers.push(0);
         this.cloneLaserDamageReady.push(false);
       }
-      const laserLvl = this.skills.find(s => s.id === 'fx_laser_1')?.level || 1;
+      const laserLvl = this.getSkillLevel('fx_laser_1') || 1;
       const positions = this.getClonePositions();
       for (let i = 0; i < cloneCount; i++) {
         if (this.cloneLasersActive[i] && this.cloneLaserDamageReady[i]) {
@@ -3650,12 +3822,14 @@ expToNextLevel: Math.floor(10 + Math.pow(bs.level, 1.7) * 4 + bs.level * 4),
 
     const particleCount = isCrit ? 8 : 4;
     const particleColor = isCrit ? '#FF6644' : enemy.color;
-    for (let i = 0; i < particleCount; i++) {
-      this.particlePool.acquire(
-        enemy.x + enemy.width / 2 + randomRange(-10, 10), 
-        enemy.y + enemy.height / 2 + randomRange(-10, 10), 
-        particleColor
-      );
+    if (this.particlePool.canAcquire()) {
+      for (let i = 0; i < particleCount; i++) {
+        this.particlePool.acquire(
+          enemy.x + enemy.width / 2 + randomRange(-10, 10),
+          enemy.y + enemy.height / 2 + randomRange(-10, 10),
+          particleColor
+        );
+      }
     }
 
     if (isCrit) {
@@ -3853,8 +4027,10 @@ expToNextLevel: Math.floor(10 + Math.pow(bs.level, 1.7) * 4 + bs.level * 4),
       this.player.health = Math.min(this.player.maxHealth, this.player.health + this.player.maxHealth * killHeal.value / 100);
     }
 
-    for (let i = 0; i < 10; i++) {
-      this.particlePool.acquire(enemy.x + enemy.width / 2, enemy.y + enemy.height / 2, enemy.color);
+    if (this.particlePool.canAcquire()) {
+      for (let i = 0; i < 10; i++) {
+        this.particlePool.acquire(enemy.x + enemy.width / 2, enemy.y + enemy.height / 2, enemy.color);
+      }
     }
 
     const expValue = enemy.type === 'boss' ? baseExpGain : Math.floor(baseExpGain / 3);
@@ -3878,6 +4054,20 @@ expToNextLevel: Math.floor(10 + Math.pow(bs.level, 1.7) * 4 + bs.level * 4),
           randomItem = `${randomItem}_lv${this.player.level}`;
         }
         this.dropPool.acquire('item', enemy.x + enemy.width / 2, enemy.y + enemy.height / 2, 1, randomItem);
+        // 高品质物品气泡提示（精致及以上）
+        if (this.onRareDrop && baseItem) {
+          const r = baseItem.rarity;
+          if (r === 'fine' || r === 'legendary' || r === 'epic' || r === 'mythic') {
+            const resolvedItem = getItemDef(randomItem);
+            this.onRareDrop({
+              id: ++this.rareDropIdCounter,
+              rarity: r,
+              name: resolvedItem?.name || baseItem.name,
+              icon: baseItem.icon,
+              kind: 'item',
+            });
+          }
+        }
       }
     }
 
@@ -3917,9 +4107,37 @@ expToNextLevel: Math.floor(10 + Math.pow(bs.level, 1.7) * 4 + bs.level * 4),
         const ox = dropX + (offsetIdx % 3 - 1) * 18;
         const oy = dropY + Math.floor(offsetIdx / 3) * 14;
         this.dropPool.acquire('equipment', ox, oy, 0, undefined, equip.id);
+        // 高品质装备气泡提示（精致及以上）
+        if (this.onRareDrop && (rarityStr === 'fine' || rarityStr === 'legendary' || rarityStr === 'epic' || rarityStr === 'mythic')) {
+          const slotLabel = SLOT_LABELS[slot] || slot;
+          const rarityName = RARITY_LABELS[rarityStr] || rarityStr;
+          this.onRareDrop({
+            id: ++this.rareDropIdCounter,
+            rarity: rarityStr,
+            name: `${rarityName}${slotLabel} Lv.${dropLevel}`,
+            icon: this.getEquipSlotIcon(slot),
+            kind: 'equipment',
+          });
+        }
         offsetIdx++;
       }
     }
+  }
+
+  // 装备槽位 emoji 图标（用于气泡提示）
+  private getEquipSlotIcon(slot: EquipSlot): string {
+    const map: Record<EquipSlot, string> = {
+      weapon: '⚔️',
+      armor: '🛡️',
+      pants: '👖',
+      shoulder: '🪖',
+      belt: '🔗',
+      shoes: '👟',
+      earring: '💎',
+      ring: '💍',
+      necklace: '📿',
+    };
+    return map[slot] || '📦';
   }
 
   private getDropItemPool(enemyType: EnemyType): string[] {
@@ -4066,7 +4284,7 @@ expToNextLevel: Math.floor(10 + Math.pow(bs.level, 1.7) * 4 + bs.level * 4),
         break;
       case 'magnet':
         this.magnetActive = true;
-        setTimeout(() => { this.magnetActive = false; }, itemDef.duration || 5000);
+        this.trackTimer(setTimeout(() => { this.magnetActive = false; }, itemDef.duration || 5000) as unknown as number);
         break;
       case 'poison':
         this.applyEnemyDebuff('poison', itemDef.value || 10, itemDef.duration || 5000);
@@ -4147,14 +4365,24 @@ expToNextLevel: Math.floor(10 + Math.pow(bs.level, 1.7) * 4 + bs.level * 4),
     return totalGold;
   }
 
-  // 技能药水：使用后获得对应效果，持续本回合
+  // 技能药水：使用后获得对应效果
+  // - 属性类（attack/attackSpeed/maxHealth/critRate/defense/range）：整回合持续
+  // - 特效/主动类（laser/sweep/clone）：按实际技能时长倒计时（laser 5s, sweep 10s, clone 整回合）
+  // - flash：单次立即效果
   private useSkillPotion(itemDef: ItemDef): void {
     const potionType = (itemDef as any).potionType as string;
     if (!potionType) return;
 
-    if (potionType !== 'flash' && this.wavePotionEffects[potionType] !== undefined) return;
+    // 防重复：同类型药水已在生效中则跳过
+    if (potionType !== 'flash') {
+      if (this.wavePotionEffects[potionType] !== undefined) return;
+      if (this.timedPotionEffects.some(p => p.type === potionType)) return;
+    }
 
     const level = (itemDef as any).potionLevel || this.player.level;
+    const icon = itemDef.icon;
+    const name = itemDef.name;
+    const itemId = itemDef.id;
 
     switch (potionType) {
       case 'attack': {
@@ -4184,7 +4412,10 @@ expToNextLevel: Math.floor(10 + Math.pow(bs.level, 1.7) * 4 + bs.level * 4),
         break;
       }
       case 'laser': {
-        this.wavePotionEffects['laser'] = 1;
+        // 激光炮：按实际技能时长 5 秒，与 fx_laser_1 技能一致
+        this.timedPotionEffects.push({ type: 'laser', remaining: 5000, duration: 5000, icon, name, itemId });
+        this.laserActive = true;
+        this.laserDuration = 5000;
         break;
       }
       case 'flash': {
@@ -4192,10 +4423,14 @@ expToNextLevel: Math.floor(10 + Math.pow(bs.level, 1.7) * 4 + bs.level * 4),
         break;
       }
       case 'sweep': {
-        this.wavePotionEffects['sweep'] = 1;
+        // 战术横扫：按实际技能时长 10 秒，与 clone_sweep 技能一致
+        this.timedPotionEffects.push({ type: 'sweep', remaining: 10000, duration: 10000, icon, name, itemId });
+        this.sweepActive = true;
+        this.sweepDuration = 10000;
         break;
       }
       case 'clone': {
+        // 分身：整回合持续（与原行为一致）
         this.wavePotionClone = { active: true, level: 1 };
         break;
       }
@@ -4363,6 +4598,7 @@ expToNextLevel: Math.floor(10 + Math.pow(bs.level, 1.7) * 4 + bs.level * 4),
       }
     }
     this.player.skillPoints = backupSkillPoints;
+    this.skillsDirty = true;
     this.calculatePlayerStats();
     if (this.onSkillsChange) this.onSkillsChange([...this.skills]);
   }
@@ -4391,6 +4627,7 @@ expToNextLevel: Math.floor(10 + Math.pow(bs.level, 1.7) * 4 + bs.level * 4),
       }
     }
     this.player.skillPoints = backupSkillPoints;
+    this.skillsDirty = true;
     this.calculatePlayerStats();
     if (this.onSkillsChange) this.onSkillsChange([...this.skills]);
   }
@@ -4415,8 +4652,12 @@ expToNextLevel: Math.floor(10 + Math.pow(bs.level, 1.7) * 4 + bs.level * 4),
   }
 
   levelUpTo100(): void {
-    this.player.level = 99;
-    while (this.player.level < 100) {
+    this.levelUpBy(100);
+  }
+
+  levelUpBy(amount: number): void {
+    const target = this.player.level + amount;
+    while (this.player.level < target) {
       this.player.level++;
       this.player.expToNextLevel = Math.floor(10 + Math.pow(this.player.level, 1.7) * 4 + this.player.level * 4);
     }
@@ -4794,7 +5035,7 @@ expToNextLevel: Math.floor(10 + Math.pow(bs.level, 1.7) * 4 + bs.level * 4),
       case 'shield_3':
         this.shieldActive = true;
         const shieldDuration = skillId === 'shield_1' ? 3000 : skillId === 'shield_2' ? 5000 : 8000;
-        setTimeout(() => { this.shieldActive = false; }, shieldDuration);
+        this.trackTimer(setTimeout(() => { this.shieldActive = false; }, shieldDuration) as unknown as number);
         break;
       case 'nuke_1':
         this.bombAllEnemies(300);
@@ -4898,12 +5139,14 @@ expToNextLevel: Math.floor(10 + Math.pow(bs.level, 1.7) * 4 + bs.level * 4),
     const explosionRadius = 80;
     const explosionDamage = 100 + this.player.attack * 0.5;
 
-    for (let i = 0; i < 20; i++) {
-      this.particlePool.acquire(
-        explosionX + randomRange(-20, 20),
-        explosionY + randomRange(-20, 20),
-        i % 2 === 0 ? '#FF6600' : '#FFAA00'
-      );
+    if (this.particlePool.canAcquire()) {
+      for (let i = 0; i < 20; i++) {
+        this.particlePool.acquire(
+          explosionX + randomRange(-20, 20),
+          explosionY + randomRange(-20, 20),
+          i % 2 === 0 ? '#FF6600' : '#FFAA00'
+        );
+      }
     }
 
     for (const enemy of enemies) {
@@ -4927,16 +5170,19 @@ expToNextLevel: Math.floor(10 + Math.pow(bs.level, 1.7) * 4 + bs.level * 4),
     const explosionRadius = bulletAny.explosionRadius || 60;
     const explosionDamage = bullet.damage * (bulletAny.explosionDamageMultiplier || 2);
 
-    for (let i = 0; i < 25; i++) {
-      const p = this.particlePool.acquire(
-        explosionX + randomRange(-30, 30),
-        explosionY + randomRange(-30, 30),
-        i % 3 === 0 ? '#FF6600' : i % 3 === 1 ? '#FFAA00' : '#FF4400'
-      );
-      (p as any).vx = randomRange(-100, 100);
-      (p as any).vy = randomRange(-120, 20);
-      (p as any).life = 0.5 + Math.random() * 0.5;
-      (p as any).maxLife = 1;
+    if (this.particlePool.canAcquire()) {
+      for (let i = 0; i < 25; i++) {
+        if (!this.particlePool.canAcquire()) break;
+        const p = this.particlePool.acquire(
+          explosionX + randomRange(-30, 30),
+          explosionY + randomRange(-30, 30),
+          i % 3 === 0 ? '#FF6600' : i % 3 === 1 ? '#FFAA00' : '#FF4400'
+        );
+        (p as any).vx = randomRange(-100, 100);
+        (p as any).vy = randomRange(-120, 20);
+        (p as any).life = 0.5 + Math.random() * 0.5;
+        (p as any).maxLife = 1;
+      }
     }
 
     for (const enemy of enemies) {
@@ -5108,6 +5354,62 @@ expToNextLevel: Math.floor(10 + Math.pow(bs.level, 1.7) * 4 + bs.level * 4),
     }));
   }
 
+  // 获取当前生效中的药水/技能效果（用于左上角"持续时间倒计时栏"显示）
+  // - 整回合属性药水：remaining=0 表示永久（直到回合结束），duration=0
+  // - 定时药水（laser/sweep）：返回剩余持续时间与总时长
+  // - 单次药水（flash）：不返回（已即时生效）
+  getActivePotionEffects(): { key: string; remaining: number; duration: number; icon: string; name: string; itemId: string; isWave: boolean }[] {
+    const result: { key: string; remaining: number; duration: number; icon: string; name: string; itemId: string; isWave: boolean }[] = [];
+    // 整回合属性药水
+    const waveIconMap: Record<string, { icon: string; name: string; itemId: string }> = {
+      attack: { icon: '💪', name: '力量药水', itemId: 'potion_attack' },
+      attackSpeed: { icon: '👟', name: '敏捷药水', itemId: 'potion_speed' },
+      maxHealth: { icon: '❤️', name: '生命药水', itemId: 'potion_health' },
+      critRate: { icon: '💥', name: '暴击药水', itemId: 'potion_crit' },
+      defense: { icon: '🛡️', name: '防御药水', itemId: 'potion_defense' },
+      range: { icon: '🦅', name: '射程药水', itemId: 'potion_range' },
+    };
+    for (const [type, value] of Object.entries(this.wavePotionEffects)) {
+      if (value === undefined || value === 0) continue;
+      const meta = waveIconMap[type];
+      if (!meta) continue;
+      result.push({
+        key: `wave_${type}`,
+        remaining: 0,
+        duration: 0,
+        icon: meta.icon,
+        name: meta.name,
+        itemId: meta.itemId,
+        isWave: true,
+      });
+    }
+    // 分身药水（整回合）
+    if (this.wavePotionClone.active) {
+      result.push({
+        key: 'wave_clone',
+        remaining: 0,
+        duration: 0,
+        icon: '👥',
+        name: '分身药水',
+        itemId: 'potion_clone',
+        isWave: true,
+      });
+    }
+    // 定时药水
+    for (const p of this.timedPotionEffects) {
+      result.push({
+        key: `timed_${p.type}`,
+        remaining: p.remaining,
+        duration: p.duration,
+        icon: p.icon,
+        name: p.name,
+        itemId: p.itemId,
+        isWave: false,
+      });
+    }
+    return result;
+  }
+
   getTalentChoices(): Talent[] {
     return [...this.talentChoices];
   }
@@ -5148,6 +5450,99 @@ expToNextLevel: Math.floor(10 + Math.pow(bs.level, 1.7) * 4 + bs.level * 4),
     this.player.y = arenaCenter - this.player.height / 2;
     this.initStars();
     this.initParallaxLayers();
+    this.rebuildBackgroundCache();
+  }
+
+  // 离屏 canvas 缓存静态背景
+  private bgCacheCanvas: HTMLCanvasElement | null = null;
+  private bgCacheCtx: CanvasRenderingContext2D | null = null;
+  // 离屏 canvas 缓存分身静态身体（约150次fillRect合并为1次drawImage）
+  private cloneSpriteCache: HTMLCanvasElement | null = null;
+  private cloneSpriteOriginX: number = 0;
+  private cloneSpriteOriginY: number = 0;
+
+  private rebuildBackgroundCache(): void {
+    const { canvasWidth, canvasHeight, groundY } = this.config;
+    if (!this.bgCacheCanvas) {
+      this.bgCacheCanvas = document.createElement('canvas');
+      this.bgCacheCtx = this.bgCacheCanvas.getContext('2d');
+    }
+    this.bgCacheCanvas!.width = canvasWidth;
+    this.bgCacheCanvas!.height = canvasHeight;
+    const ctx = this.bgCacheCtx!;
+    const px = 2;
+
+    // 深紫黑天空 - 霓虹发光感
+    const skyGradient = ctx.createLinearGradient(0, 0, 0, groundY);
+    skyGradient.addColorStop(0, '#0A0814');
+    skyGradient.addColorStop(0.2, '#131025');
+    skyGradient.addColorStop(0.5, '#1A1630');
+    skyGradient.addColorStop(0.8, '#1E1A35');
+    skyGradient.addColorStop(1, '#242040');
+    ctx.fillStyle = skyGradient;
+    ctx.fillRect(0, 0, canvasWidth, groundY);
+
+    // 远处霓虹城市轮廓
+    this.renderNeonCityline(ctx, canvasWidth, groundY);
+
+    // 大气雾霭
+    const hazeGradient = ctx.createLinearGradient(0, groundY - 60, 0, groundY);
+    hazeGradient.addColorStop(0, 'rgba(30, 26, 53, 0)');
+    hazeGradient.addColorStop(0.5, 'rgba(40, 30, 70, 0.3)');
+    hazeGradient.addColorStop(1, 'rgba(60, 40, 90, 0.5)');
+    ctx.fillStyle = hazeGradient;
+    ctx.fillRect(0, groundY - 60, canvasWidth, 60);
+
+    // 地平线霓虹分隔线
+    const horizonGlow = ctx.createLinearGradient(0, groundY - 4, 0, groundY + 6);
+    horizonGlow.addColorStop(0, 'rgba(176, 38, 255, 0)');
+    horizonGlow.addColorStop(0.4, 'rgba(176, 38, 255, 0.5)');
+    horizonGlow.addColorStop(0.5, 'rgba(0, 245, 212, 0.9)');
+    horizonGlow.addColorStop(0.6, 'rgba(176, 38, 255, 0.5)');
+    horizonGlow.addColorStop(1, 'rgba(176, 38, 255, 0)');
+    ctx.fillStyle = horizonGlow;
+    ctx.fillRect(0, groundY - 4, canvasWidth, 10);
+
+    // 科技风格地面
+    const groundGradient = ctx.createLinearGradient(0, groundY, 0, canvasHeight);
+    groundGradient.addColorStop(0, '#1E1A35');
+    groundGradient.addColorStop(0.2, '#181530');
+    groundGradient.addColorStop(0.5, '#131025');
+    groundGradient.addColorStop(0.8, '#0D0B1A');
+    groundGradient.addColorStop(1, '#0A0814');
+    ctx.fillStyle = groundGradient;
+    ctx.fillRect(0, groundY, canvasWidth, canvasHeight - groundY);
+
+    // 战斗场地平台边界（静态部分，脉冲线动态渲染）
+    const platformTop = groundY + 2;
+    const platformHeight = canvasHeight - platformTop;
+    const edgeWidth = 24;
+
+    ctx.fillStyle = 'rgba(20, 16, 42, 0.6)';
+    ctx.fillRect(0, platformTop, canvasWidth, platformHeight);
+
+    const edgeGrad = ctx.createLinearGradient(0, platformTop, 0, platformTop + 4);
+    edgeGrad.addColorStop(0, 'rgba(0, 245, 212, 0.7)');
+    edgeGrad.addColorStop(1, 'rgba(0, 245, 212, 0)');
+    ctx.fillStyle = edgeGrad;
+    ctx.fillRect(0, platformTop, canvasWidth, 4);
+
+    const leftEdgeGrad = ctx.createLinearGradient(0, platformTop, edgeWidth, platformTop);
+    leftEdgeGrad.addColorStop(0, 'rgba(176, 38, 255, 0.5)');
+    leftEdgeGrad.addColorStop(0.4, 'rgba(176, 38, 255, 0.2)');
+    leftEdgeGrad.addColorStop(1, 'rgba(176, 38, 255, 0)');
+    ctx.fillStyle = leftEdgeGrad;
+    ctx.fillRect(0, platformTop, edgeWidth, platformHeight);
+
+    const rightEdgeGrad = ctx.createLinearGradient(canvasWidth - edgeWidth, platformTop, canvasWidth, platformTop);
+    rightEdgeGrad.addColorStop(0, 'rgba(176, 38, 255, 0)');
+    rightEdgeGrad.addColorStop(0.6, 'rgba(176, 38, 255, 0.2)');
+    rightEdgeGrad.addColorStop(1, 'rgba(176, 38, 255, 0.5)');
+    ctx.fillStyle = rightEdgeGrad;
+    ctx.fillRect(canvasWidth - edgeWidth, platformTop, edgeWidth, platformHeight);
+
+    // 地面科技网格线
+    this.renderTechGrid(ctx, canvasWidth, groundY, canvasHeight);
   }
 
   private render(): void {
@@ -5194,60 +5589,29 @@ expToNextLevel: Math.floor(10 + Math.pow(bs.level, 1.7) * 4 + bs.level * 4),
     const ctx = this.ctx;
     const { canvasWidth, canvasHeight, groundY } = this.config;
 
-    // Canvas代码绘制 - 末世科技风深紫黑背景
     const px = 2;
 
-    // 深紫黑天空 - 霓虹发光感
-    const skyGradient = ctx.createLinearGradient(0, 0, 0, groundY);
-    skyGradient.addColorStop(0, '#0A0814');
-    skyGradient.addColorStop(0.2, '#131025');
-    skyGradient.addColorStop(0.5, '#1A1630');
-    skyGradient.addColorStop(0.8, '#1E1A35');
-    skyGradient.addColorStop(1, '#242040');
-    ctx.fillStyle = skyGradient;
-    ctx.fillRect(0, 0, canvasWidth, groundY);
+    // 优先用离屏缓存（静态背景：天空/城市/雾霭/地平线/地面/平台/网格）
+    if (this.bgCacheCanvas) {
+      ctx.drawImage(this.bgCacheCanvas, 0, 0);
+    } else {
+      // 回退：重建缓存
+      this.rebuildBackgroundCache();
+      if (this.bgCacheCanvas) {
+        ctx.drawImage(this.bgCacheCanvas, 0, 0);
+      }
+    }
 
-    // 远处霓虹城市轮廓
-    this.renderNeonCityline(ctx, canvasWidth, groundY);
-
-    // 大气雾霭 - 让远处城市融入夜空，增加深度感
-    const hazeGradient = ctx.createLinearGradient(0, groundY - 60, 0, groundY);
-    hazeGradient.addColorStop(0, 'rgba(30, 26, 53, 0)');
-    hazeGradient.addColorStop(0.5, 'rgba(40, 30, 70, 0.3)');
-    hazeGradient.addColorStop(1, 'rgba(60, 40, 90, 0.5)');
-    ctx.fillStyle = hazeGradient;
-    ctx.fillRect(0, groundY - 60, canvasWidth, 60);
-
-    // 地平线霓虹分隔线 - 清晰区分城市与战场
-    const horizonGlow = ctx.createLinearGradient(0, groundY - 4, 0, groundY + 6);
-    horizonGlow.addColorStop(0, 'rgba(176, 38, 255, 0)');
-    horizonGlow.addColorStop(0.4, 'rgba(176, 38, 255, 0.5)');
-    horizonGlow.addColorStop(0.5, 'rgba(0, 245, 212, 0.9)');
-    horizonGlow.addColorStop(0.6, 'rgba(176, 38, 255, 0.5)');
-    horizonGlow.addColorStop(1, 'rgba(176, 38, 255, 0)');
-    ctx.fillStyle = horizonGlow;
-    ctx.fillRect(0, groundY - 4, canvasWidth, 10);
-
-    // 地平线脉冲扫描线
+    // 地平线脉冲扫描线（动态）
     const pulse = 0.4 + Math.sin(this.animFrame * 0.05) * 0.2;
     ctx.fillStyle = `rgba(0, 245, 212, ${pulse})`;
     ctx.fillRect(0, groundY, canvasWidth, 1);
 
-    // 科技风格地面
-    const groundGradient = ctx.createLinearGradient(0, groundY, 0, canvasHeight);
-    groundGradient.addColorStop(0, '#1E1A35');
-    groundGradient.addColorStop(0.2, '#181530');
-    groundGradient.addColorStop(0.5, '#131025');
-    groundGradient.addColorStop(0.8, '#0D0B1A');
-    groundGradient.addColorStop(1, '#0A0814');
-    ctx.fillStyle = groundGradient;
-    ctx.fillRect(0, groundY, canvasWidth, canvasHeight - groundY);
-
-    // 战斗场地平台边界 - 突出战场区域
-    this.renderArenaPlatform(ctx, canvasWidth, groundY, canvasHeight);
-
-    // 地面科技网格线
-    this.renderTechGrid(ctx, canvasWidth, groundY, canvasHeight);
+    // 平台脉冲边缘线（动态，原 renderArenaPlatform 中的脉冲部分）
+    const platformTop = groundY + 2;
+    const platformPulse = 0.5 + Math.sin(this.animFrame * 0.08) * 0.3;
+    ctx.fillStyle = `rgba(0, 245, 212, ${platformPulse})`;
+    ctx.fillRect(0, platformTop, canvasWidth, 1);
 
     // 粒子光点效果
     this.renderTechParticles(ctx, canvasWidth, groundY);
@@ -5623,42 +5987,14 @@ expToNextLevel: Math.floor(10 + Math.pow(bs.level, 1.7) * 4 + bs.level * 4),
     const { x, y } = this.player;
 
     const isShooting = this.muzzleFlashTimer > 0;
-    const idleSheet = this.sprites.playerIdleSheet;
-    const shootSheet = this.sprites.playerShootSheet;
 
-    if (idleSheet && shootSheet) {
-      const frameWidth = 64;
-      const frameHeight = 64;
-      const anchorX = 14;
-      const anchorY = 18;
-      const frameCount = isShooting ? 4 : 6;
-      const sheet = isShooting ? shootSheet : idleSheet;
-      const frameIndex = isShooting
-        ? Math.min(frameCount - 1, Math.max(0, 3 - this.muzzleFlashTimer))
-        : Math.floor(this.animFrame / 8) % frameCount;
-
-      ctx.save();
-      ctx.imageSmoothingEnabled = false;
-      ctx.drawImage(
-        sheet,
-        frameIndex * frameWidth,
-        0,
-        frameWidth,
-        frameHeight,
-        Math.round(x - anchorX),
-        Math.round(y - anchorY),
-        frameWidth,
-        frameHeight
-      );
-      ctx.restore();
-      return;
-    }
-
+    // 优先使用蓝金未来战士像素绘制（覆盖 sprite sheet）
     const recoil = isShooting ? -2 : 0;
 
     ctx.save();
     ctx.translate(x, y);
 
+    // 上下漂浮效果（保持原节奏）
     const floatOffset = Math.sin(this.animFrame * 0.06) * 1.5;
     ctx.translate(0, floatOffset);
 
@@ -5668,335 +6004,868 @@ expToNextLevel: Math.floor(10 + Math.pow(bs.level, 1.7) * 4 + bs.level * 4),
     ctx.ellipse(0, 29, 10, 3.5, 0, 0, Math.PI * 2);
     ctx.fill();
 
-    // 未来战士风格 - 像素绘制 (px=1.5, 总高约30px = 原20px+10px)
-    const px = 1.5;
+    // 蓝金未来战士 - 像素绘制（暂不缩放模型尺寸，按设计稿原样绘制）
+    this.drawFutureSoldierBody(ctx, recoil, isShooting);
+
+    ctx.restore();
+  }
+
+  // 蓝金未来战士造型（v3 重新设计）：
+  // 姿态：站立悬浮 + 上身略后仰 + 双手向前平举双枪（射击姿态）
+  // 背部：喷气式设备（双涡轮引擎）代替翅膀
+  // 主色：深海蓝主体 + 钴蓝装甲 + 金黄装饰 + 霓虹青能量线
+  // px=2.25 像素单位；recoil=射击后坐力偏移；isShooting=是否射击中
+  private drawFutureSoldierBody(ctx: CanvasRenderingContext2D, recoil: number, isShooting: boolean): void {
+    const px = 2.25;
+
+    // === 颜色常量（22 色保留） ===
+    const C_DEEP_BLUE = '#0F1F4E';
+    const C_COBALT = '#1A2A6E';
+    const C_JEWEL = '#2A4ABE';
+    const C_BRIGHT_BLUE = '#4D7AE8';
+    const C_GOLD = '#FFD700';
+    const C_GOLD_DARK = '#B8860B';
+    const C_GOLD_LIGHT = '#FFE680';
+    const C_BRONZE = '#8B6914';
+    const C_NEON_CYAN = '#00F5D4';
+    const C_ELECTRIC = '#00B4FF';
+    const C_WHITE = '#E0E0FF';
+    const C_SILVER = '#C0C0C0';
+    const C_SILVER_DARK = '#707070';
+    const C_PURPLE = '#B026FF';
+    const C_DARK_PURPLE = '#6B3FAA';
+    const C_RED = '#FF3B3B';
+    const C_DARK_RED = '#8B1A1A';
+    const C_GREEN = '#00FF7F';
+    const C_ORANGE = '#FF8C00';
+    const C_PINK = '#FF69B4';
+    const C_LEATHER = '#6B4423';
+    const C_LEATHER_DARK = '#3D2914';
+    const C_BLACK = '#10101E';
+
+    // === 整体姿态：悬浮站立射击姿态，上身略后仰 ===
+    ctx.save();
+    ctx.rotate(Math.PI / 60); // 后仰约3度，从容射击感
+
+    // === 双腿（并列站立，略分腿，悬浮）===
     ctx.save();
     ctx.translate(0, recoil);
+    ctx.translate(0, -1.2 * px); // 整体悬浮上移
 
-    // === 重力靴 / 战术靴 (右脚直立) ===
-    // 右脚 (前脚，直立)
-    ctx.fillStyle = '#1A1A2E';
-    ctx.fillRect(8 * px, 17 * px, 4.8 * px, 3 * px);
-    // 右脚靴底发光
-    ctx.fillStyle = '#00F5D4';
-    ctx.fillRect(8 * px, 19.5 * px, 4.8 * px, 0.5 * px);
-    // 右脚靴后跟
-    ctx.fillStyle = '#10101E';
-    ctx.fillRect(7.5 * px, 17.5 * px, 0.8 * px, 2 * px);
-    // 右脚靴筒
-    ctx.fillStyle = '#252540';
-    ctx.fillRect(8.5 * px, 15 * px, 3.8 * px, 2 * px);
-    // 右脚靴带发光线
-    ctx.fillStyle = '#00F5D4';
-    ctx.fillRect(8.5 * px, 15.8 * px, 3.8 * px, 0.4 * px);
-
-    // 右腿 (直立)
-    ctx.fillStyle = '#2D2D4A';
-    ctx.fillRect(8.5 * px, 9.5 * px, 3.2 * px, 5.5 * px);
-    // 右腿暗部 (后侧)
-    ctx.fillStyle = '#1E1E35';
-    ctx.fillRect(8.5 * px, 10 * px, 0.8 * px, 5 * px);
-    // 右腿高光 (前侧)
-    ctx.fillStyle = '#3A3A5A';
-    ctx.fillRect(10.9 * px, 10 * px, 0.8 * px, 5 * px);
-    // 右腿护膝
-    ctx.fillStyle = '#3A3A5A';
-    ctx.fillRect(10.5 * px, 12 * px, 2 * px, 1.8 * px);
-    // 右腿护膝发光点
-    ctx.fillStyle = '#B026FF';
-    ctx.fillRect(11.1 * px, 12.5 * px, 0.7 * px, 0.9 * px);
-    // 右腿大腿绑带
-    ctx.fillStyle = '#1A1A2E';
-    ctx.fillRect(8.5 * px, 10.5 * px, 3.2 * px, 0.4 * px);
-
-    // === 战术裤 + 左脚靴 (左腿45度向前抬起，整体旋转) ===
+    // === 左腿（后侧，略外撇）===
     ctx.save();
-    ctx.translate(7.5 * px, 9.5 * px);
-    ctx.rotate(-Math.PI / 4); // 45度向前抬起
+    ctx.translate(6.5 * px, 9.5 * px);
+    ctx.rotate(-Math.PI / 36); // 外撇5度
 
-    // 左腿 (大腿，沿旋转后方向)
-    ctx.fillStyle = '#2D2D4A';
+    // 左腿大腿分段装甲（4段更明显）
+    ctx.fillStyle = C_COBALT;
     ctx.fillRect(0, 0, 3 * px, 5.5 * px);
-    // 左腿暗部 (后侧)
-    ctx.fillStyle = '#1E1E35';
+    // 大腿暗部
+    ctx.fillStyle = C_DEEP_BLUE;
     ctx.fillRect(0, 0.5 * px, 0.8 * px, 5 * px);
-    // 左腿高光 (前侧)
-    ctx.fillStyle = '#3A3A5A';
-    ctx.fillRect(2.3 * px, 0.5 * px, 0.7 * px, 5 * px);
-    // 左腿护膝
-    ctx.fillStyle = '#3A3A5A';
-    ctx.fillRect(2.7 * px, 2.5 * px, 2 * px, 1.8 * px);
-    // 左腿护膝发光点
-    ctx.fillStyle = '#B026FF';
-    ctx.fillRect(3.3 * px, 3 * px, 0.7 * px, 0.9 * px);
-    // 左腿大腿绑带
-    ctx.fillStyle = '#1A1A2E';
-    ctx.fillRect(0, 1 * px, 3 * px, 0.4 * px);
+    // 大腿高光
+    ctx.fillStyle = C_JEWEL;
+    ctx.fillRect(2.2 * px, 0.5 * px, 0.8 * px, 5 * px);
+    // 大腿亮蓝边缘
+    ctx.fillStyle = C_BRIGHT_BLUE;
+    ctx.fillRect(2.9 * px, 0.5 * px, 0.15 * px, 5 * px);
+    // 大腿分段金边（3道接缝）
+    ctx.fillStyle = C_GOLD;
+    ctx.fillRect(0, 1.5 * px, 3 * px, 0.15 * px);
+    ctx.fillRect(0, 3 * px, 3 * px, 0.15 * px);
+    ctx.fillRect(0, 4.3 * px, 3 * px, 0.15 * px);
+    // 大腿绑带（皮革+金扣）
+    ctx.fillStyle = C_LEATHER_DARK;
+    ctx.fillRect(0, 0.8 * px, 3 * px, 0.4 * px);
+    ctx.fillStyle = C_GOLD;
+    ctx.fillRect(2.5 * px, 0.85 * px, 0.4 * px, 0.3 * px);
+    // 关节铆钉（×3）
+    ctx.fillStyle = C_SILVER;
+    ctx.fillRect(0.3 * px, 1.55 * px, 0.3 * px, 0.3 * px);
+    ctx.fillRect(0.3 * px, 3.05 * px, 0.3 * px, 0.3 * px);
+    ctx.fillRect(0.3 * px, 4.35 * px, 0.3 * px, 0.3 * px);
+    ctx.fillStyle = C_SILVER_DARK;
+    ctx.fillRect(0.3 * px, 1.8 * px, 0.3 * px, 0.1 * px);
+    ctx.fillRect(0.3 * px, 3.3 * px, 0.3 * px, 0.1 * px);
+    ctx.fillRect(0.3 * px, 4.6 * px, 0.3 * px, 0.1 * px);
 
-    // 左脚靴 (相对腿末端，跟随旋转)
-    ctx.fillStyle = '#1A1A2E';
-    ctx.fillRect(-0.5 * px, 5.5 * px, 4.5 * px, 3 * px);
-    // 左脚靴底发光
-    ctx.fillStyle = '#00F5D4';
-    ctx.fillRect(-0.5 * px, 8 * px, 4.5 * px, 0.5 * px);
-    // 左脚靴后跟
-    ctx.fillStyle = '#10101E';
-    ctx.fillRect(-1 * px, 6 * px, 0.8 * px, 2 * px);
-    // 左脚靴筒
-    ctx.fillStyle = '#252540';
-    ctx.fillRect(0 * px, 3.5 * px, 3.5 * px, 2 * px);
-    // 左脚靴带发光线
-    ctx.fillStyle = '#00F5D4';
-    ctx.fillRect(0 * px, 4.3 * px, 3.5 * px, 0.4 * px);
+    // 左腿护膝（金色立体）
+    ctx.fillStyle = C_GOLD;
+    ctx.fillRect(2.3 * px, 2.8 * px, 1.9 * px, 1.7 * px);
+    ctx.fillStyle = C_GOLD_DARK;
+    ctx.fillRect(2.3 * px, 4.2 * px, 1.9 * px, 0.3 * px);
+    ctx.fillStyle = C_GOLD_LIGHT;
+    ctx.fillRect(2.4 * px, 2.9 * px, 0.5 * px, 0.4 * px);
+    // 护膝中心紫宝石
+    ctx.fillStyle = C_PURPLE;
+    ctx.fillRect(2.9 * px, 3.1 * px, 0.7 * px, 0.7 * px);
+    ctx.fillStyle = C_WHITE;
+    ctx.fillRect(2.95 * px, 3.15 * px, 0.2 * px, 0.2 * px);
+    // 护膝侧边能量点（电光蓝）
+    ctx.fillStyle = C_ELECTRIC;
+    ctx.fillRect(3.7 * px, 3.3 * px, 0.3 * px, 0.3 * px);
+
+    // === 左小腿护甲（独立分段，钴蓝+金边）===
+    ctx.fillStyle = C_COBALT;
+    ctx.fillRect(0.5 * px, 5.5 * px, 3 * px, 2 * px);
+    ctx.fillStyle = C_DEEP_BLUE;
+    ctx.fillRect(0.5 * px, 5.7 * px, 0.6 * px, 1.8 * px);
+    ctx.fillStyle = C_JEWEL;
+    ctx.fillRect(3 * px, 5.7 * px, 0.5 * px, 1.8 * px);
+    // 小腿金边分段
+    ctx.fillStyle = C_GOLD;
+    ctx.fillRect(0.5 * px, 6.3 * px, 3 * px, 0.12 * px);
+    // 小腿能量线（霓虹青）
+    ctx.fillStyle = C_NEON_CYAN;
+    ctx.globalAlpha = 0.6;
+    ctx.fillRect(1.2 * px, 5.8 * px, 1.5 * px, 0.2 * px);
+    ctx.globalAlpha = 1;
+    // 小腿护甲铆钉
+    ctx.fillStyle = C_SILVER;
+    ctx.fillRect(0.8 * px, 6.6 * px, 0.25 * px, 0.25 * px);
+    ctx.fillStyle = C_SILVER_DARK;
+    ctx.fillRect(0.8 * px, 6.8 * px, 0.25 * px, 0.08 * px);
+
+    // 左脚战术靴（增高鞋面，更立体）
+    ctx.fillStyle = C_DEEP_BLUE;
+    ctx.fillRect(-0.5 * px, 7.5 * px, 4.5 * px, 2 * px);
+    ctx.fillStyle = C_COBALT;
+    ctx.fillRect(0, 5.5 * px, 3.5 * px, 2.2 * px);
+    // 靴金边
+    ctx.fillStyle = C_GOLD;
+    ctx.fillRect(0, 5.5 * px, 3.5 * px, 0.15 * px);
+    ctx.fillRect(0, 6.7 * px, 3.5 * px, 0.12 * px);
+    // 靴底发光（霓虹青，加宽）
+    ctx.fillStyle = C_NEON_CYAN;
+    ctx.globalAlpha = 0.9;
+    ctx.fillRect(-0.5 * px, 9.3 * px, 4.5 * px, 0.4 * px);
+    ctx.fillStyle = C_NEON_CYAN;
+    ctx.globalAlpha = 0.5;
+    ctx.fillRect(-0.5 * px, 9.7 * px, 4.5 * px, 0.6 * px);
+    ctx.globalAlpha = 1;
+    // 后跟
+    ctx.fillStyle = C_BLACK;
+    ctx.fillRect(-1 * px, 7.5 * px, 0.8 * px, 1.8 * px);
+    // 靴面金线（2道）
+    ctx.fillStyle = C_GOLD;
+    ctx.fillRect(0.5 * px, 6.1 * px, 2.5 * px, 0.18 * px);
+    ctx.fillRect(0.5 * px, 7 * px, 2.5 * px, 0.12 * px);
+    // 靴扣（银色 + 紫宝石装饰）
+    ctx.fillStyle = C_SILVER;
+    ctx.fillRect(2.8 * px, 5.8 * px, 0.5 * px, 0.5 * px);
+    ctx.fillStyle = C_PURPLE;
+    ctx.fillRect(2.85 * px, 5.85 * px, 0.4 * px, 0.4 * px);
+    ctx.fillStyle = C_WHITE;
+    ctx.fillRect(2.9 * px, 5.9 * px, 0.15 * px, 0.15 * px);
 
     ctx.restore();
 
-    // === 腰带 (侧面视角) ===
-    ctx.fillStyle = '#1A1A2E';
-    ctx.fillRect(6 * px, 8.5 * px, 6 * px, 1.2 * px);
-    // 腰带发光线
-    ctx.fillStyle = '#00F5D4';
-    ctx.fillRect(6 * px, 8.9 * px, 6 * px, 0.3 * px);
-    // 腰带扣 (侧面突出)
-    ctx.fillStyle = '#B026FF';
-    ctx.fillRect(11.5 * px, 8.3 * px, 1 * px, 1.6 * px);
+    // === 右腿（前侧，略外撇）===
+    ctx.save();
+    ctx.translate(9 * px, 9.5 * px);
+    ctx.rotate(Math.PI / 36); // 外撇5度
 
-    // === 上半身 (射击时后坐力) ===
+    // 右腿大腿分段装甲（4段）
+    ctx.fillStyle = C_COBALT;
+    ctx.fillRect(0, 0, 3 * px, 5.5 * px);
+    ctx.fillStyle = C_DEEP_BLUE;
+    ctx.fillRect(0, 0.5 * px, 0.8 * px, 5 * px);
+    ctx.fillStyle = C_JEWEL;
+    ctx.fillRect(2.2 * px, 0.5 * px, 0.8 * px, 5 * px);
+    ctx.fillStyle = C_BRIGHT_BLUE;
+    ctx.fillRect(2.9 * px, 0.5 * px, 0.15 * px, 5 * px);
+    ctx.fillStyle = C_GOLD;
+    ctx.fillRect(0, 1.5 * px, 3 * px, 0.15 * px);
+    ctx.fillRect(0, 3 * px, 3 * px, 0.15 * px);
+    ctx.fillRect(0, 4.3 * px, 3 * px, 0.15 * px);
+    ctx.fillStyle = C_LEATHER_DARK;
+    ctx.fillRect(0, 0.8 * px, 3 * px, 0.4 * px);
+    ctx.fillStyle = C_GOLD;
+    ctx.fillRect(2.5 * px, 0.85 * px, 0.4 * px, 0.3 * px);
+    ctx.fillStyle = C_SILVER;
+    ctx.fillRect(0.3 * px, 1.55 * px, 0.3 * px, 0.3 * px);
+    ctx.fillRect(0.3 * px, 3.05 * px, 0.3 * px, 0.3 * px);
+    ctx.fillRect(0.3 * px, 4.35 * px, 0.3 * px, 0.3 * px);
+    ctx.fillStyle = C_SILVER_DARK;
+    ctx.fillRect(0.3 * px, 1.8 * px, 0.3 * px, 0.1 * px);
+    ctx.fillRect(0.3 * px, 3.3 * px, 0.3 * px, 0.1 * px);
+    ctx.fillRect(0.3 * px, 4.6 * px, 0.3 * px, 0.1 * px);
+
+    // 右腿护膝
+    ctx.fillStyle = C_GOLD;
+    ctx.fillRect(2.3 * px, 2.8 * px, 1.9 * px, 1.7 * px);
+    ctx.fillStyle = C_GOLD_DARK;
+    ctx.fillRect(2.3 * px, 4.2 * px, 1.9 * px, 0.3 * px);
+    ctx.fillStyle = C_GOLD_LIGHT;
+    ctx.fillRect(2.4 * px, 2.9 * px, 0.5 * px, 0.4 * px);
+    ctx.fillStyle = C_PURPLE;
+    ctx.fillRect(2.9 * px, 3.1 * px, 0.7 * px, 0.7 * px);
+    ctx.fillStyle = C_WHITE;
+    ctx.fillRect(2.95 * px, 3.15 * px, 0.2 * px, 0.2 * px);
+    ctx.fillStyle = C_ELECTRIC;
+    ctx.fillRect(3.7 * px, 3.3 * px, 0.3 * px, 0.3 * px);
+
+    // === 右小腿护甲（独立分段）===
+    ctx.fillStyle = C_COBALT;
+    ctx.fillRect(0.5 * px, 5.5 * px, 3 * px, 2 * px);
+    ctx.fillStyle = C_DEEP_BLUE;
+    ctx.fillRect(0.5 * px, 5.7 * px, 0.6 * px, 1.8 * px);
+    ctx.fillStyle = C_JEWEL;
+    ctx.fillRect(3 * px, 5.7 * px, 0.5 * px, 1.8 * px);
+    ctx.fillStyle = C_GOLD;
+    ctx.fillRect(0.5 * px, 6.3 * px, 3 * px, 0.12 * px);
+    ctx.fillStyle = C_NEON_CYAN;
+    ctx.globalAlpha = 0.6;
+    ctx.fillRect(1.2 * px, 5.8 * px, 1.5 * px, 0.2 * px);
+    ctx.globalAlpha = 1;
+    ctx.fillStyle = C_SILVER;
+    ctx.fillRect(0.8 * px, 6.6 * px, 0.25 * px, 0.25 * px);
+    ctx.fillStyle = C_SILVER_DARK;
+    ctx.fillRect(0.8 * px, 6.8 * px, 0.25 * px, 0.08 * px);
+
+    // 右脚战术靴
+    ctx.fillStyle = C_DEEP_BLUE;
+    ctx.fillRect(-0.5 * px, 7.5 * px, 4.5 * px, 2 * px);
+    ctx.fillStyle = C_COBALT;
+    ctx.fillRect(0, 5.5 * px, 3.5 * px, 2.2 * px);
+    ctx.fillStyle = C_GOLD;
+    ctx.fillRect(0, 5.5 * px, 3.5 * px, 0.15 * px);
+    ctx.fillRect(0, 6.7 * px, 3.5 * px, 0.12 * px);
+    ctx.fillStyle = C_NEON_CYAN;
+    ctx.globalAlpha = 0.9;
+    ctx.fillRect(-0.5 * px, 9.3 * px, 4.5 * px, 0.4 * px);
+    ctx.fillStyle = C_NEON_CYAN;
+    ctx.globalAlpha = 0.5;
+    ctx.fillRect(-0.5 * px, 9.7 * px, 4.5 * px, 0.6 * px);
+    ctx.globalAlpha = 1;
+    ctx.fillStyle = C_BLACK;
+    ctx.fillRect(-1 * px, 7.5 * px, 0.8 * px, 1.8 * px);
+    ctx.fillStyle = C_GOLD;
+    ctx.fillRect(0.5 * px, 6.1 * px, 2.5 * px, 0.18 * px);
+    ctx.fillRect(0.5 * px, 7 * px, 2.5 * px, 0.12 * px);
+    ctx.fillStyle = C_SILVER;
+    ctx.fillRect(2.8 * px, 5.8 * px, 0.5 * px, 0.5 * px);
+    ctx.fillStyle = C_PURPLE;
+    ctx.fillRect(2.85 * px, 5.85 * px, 0.4 * px, 0.4 * px);
+    ctx.fillStyle = C_WHITE;
+    ctx.fillRect(2.9 * px, 5.9 * px, 0.15 * px, 0.15 * px);
+
+    ctx.restore();
+
+    // === 腰带（皮革+金色扣+2侧袋+2紫宝石）===
+    ctx.fillStyle = C_LEATHER;
+    ctx.fillRect(6 * px, 8.5 * px, 6 * px, 1.2 * px);
+    ctx.fillStyle = C_LEATHER_DARK;
+    ctx.fillRect(6 * px, 9.4 * px, 6 * px, 0.3 * px);
+    ctx.fillStyle = C_GOLD;
+    ctx.fillRect(6 * px, 8.5 * px, 6 * px, 0.15 * px);
+    // 腰带扣
+    ctx.fillRect(8.5 * px, 8.3 * px, 1 * px, 1.6 * px);
+    ctx.fillStyle = C_GOLD_DARK;
+    ctx.fillRect(8.5 * px, 9.7 * px, 1 * px, 0.2 * px);
+    ctx.fillStyle = C_PURPLE;
+    ctx.fillRect(8.7 * px, 8.6 * px, 0.6 * px, 0.7 * px);
+    ctx.fillStyle = C_WHITE;
+    ctx.fillRect(8.8 * px, 8.7 * px, 0.2 * px, 0.2 * px);
+    // 左侧袋
+    ctx.fillStyle = C_DEEP_BLUE;
+    ctx.fillRect(6 * px, 8.7 * px, 1.5 * px, 1 * px);
+    ctx.fillStyle = C_GOLD;
+    ctx.fillRect(6 * px, 8.7 * px, 1.5 * px, 0.15 * px);
+    ctx.fillStyle = C_SILVER;
+    ctx.fillRect(6.5 * px, 9 * px, 0.5 * px, 0.4 * px);
+    ctx.fillStyle = C_PURPLE;
+    ctx.fillRect(6.7 * px, 9.1 * px, 0.3 * px, 0.3 * px);
+    // 右侧袋
+    ctx.fillStyle = C_DEEP_BLUE;
+    ctx.fillRect(10.5 * px, 8.7 * px, 1.5 * px, 1 * px);
+    ctx.fillStyle = C_GOLD;
+    ctx.fillRect(10.5 * px, 8.7 * px, 1.5 * px, 0.15 * px);
+    ctx.fillStyle = C_SILVER;
+    ctx.fillRect(11 * px, 9 * px, 0.5 * px, 0.4 * px);
+    ctx.fillStyle = C_PURPLE;
+    ctx.fillRect(11.2 * px, 9.1 * px, 0.3 * px, 0.3 * px);
+
+    ctx.restore(); // 腿部recoil结束
+
+    // === 上半身（射击时后坐力）===
     ctx.save();
     ctx.translate(0, recoil);
 
-    // === 战术胸甲 / 能量背心 (侧面视角) ===
-    ctx.fillStyle = '#252540';
-    ctx.fillRect(5.5 * px, 4 * px, 7 * px, 4.5 * px);
-    // 背甲暗部
-    ctx.fillStyle = '#1A1A2E';
-    ctx.fillRect(5.5 * px, 4 * px, 1.5 * px, 4.5 * px);
-    // 胸甲高光 (前侧)
-    ctx.fillStyle = '#3A3A60';
-    ctx.fillRect(11 * px, 4.2 * px, 1.2 * px, 4 * px);
-    // 胸前能量核心 (侧面可见)
-    const coreGlow = 0.6 + Math.sin(this.animFrame * 0.15) * 0.4;
-    ctx.fillStyle = '#00F5D4';
-    ctx.globalAlpha = coreGlow;
-    ctx.fillRect(11 * px, 5 * px, 1.5 * px, 2 * px);
-    ctx.globalAlpha = 1;
-    ctx.fillStyle = '#FFFFFF';
-    ctx.fillRect(11.3 * px, 5.5 * px, 1 * px, 1 * px);
-    // 核心外发光
-    ctx.globalAlpha = coreGlow * 0.3;
-    ctx.fillStyle = '#00F5D4';
-    ctx.fillRect(10.5 * px, 4.5 * px, 2.5 * px, 3 * px);
-    ctx.globalAlpha = 1;
-    // 胸甲侧面霓虹线
-    ctx.fillStyle = '#B026FF';
-    ctx.fillRect(9 * px, 5 * px, 2 * px, 0.4 * px);
-    ctx.fillRect(9 * px, 6.5 * px, 2 * px, 0.4 * px);
+    // === 背部喷气式设备（双涡轮引擎，代替翅膀）===
+    // 中央背板（深海蓝，承载双涡轮）
+    ctx.fillStyle = C_DEEP_BLUE;
+    ctx.fillRect(5 * px, 3 * px, 4 * px, 5 * px);
+    // 背板金边
+    ctx.fillStyle = C_GOLD_DARK;
+    ctx.fillRect(5 * px, 3 * px, 4 * px, 0.2 * px);
+    ctx.fillRect(5 * px, 7.8 * px, 4 * px, 0.2 * px);
+    // 背板分隔金线
+    ctx.fillStyle = C_GOLD;
+    ctx.fillRect(6.9 * px, 3 * px, 0.2 * px, 5 * px);
 
-    // === 背部喷射器 (侧面视角) ===
-    ctx.fillStyle = '#3A3A5A';
-    ctx.fillRect(4.5 * px, 3.5 * px, 1.5 * px, 3.5 * px);
-    // 喷射器发光
-    ctx.fillStyle = '#FF0080';
-    ctx.fillRect(4.8 * px, 3.8 * px, 0.8 * px, 0.6 * px);
-    // 喷射器尾焰
-    ctx.fillStyle = '#FF0080';
+    // === 左涡轮引擎 ===
+    ctx.save();
+    ctx.translate(5 * px, 5.5 * px); // 左涡轮中心
+
+    // 引擎外壳（钴蓝）
+    ctx.fillStyle = C_COBALT;
+    ctx.beginPath();
+    ctx.arc(0, 0, 1.8 * px, 0, Math.PI * 2);
+    ctx.fill();
+    // 引擎金边
+    ctx.strokeStyle = C_GOLD;
+    ctx.lineWidth = 0.25 * px;
+    ctx.stroke();
+    // 引擎内圈（深海蓝）
+    ctx.fillStyle = C_DEEP_BLUE;
+    ctx.beginPath();
+    ctx.arc(0, 0, 1.3 * px, 0, Math.PI * 2);
+    ctx.fill();
+    // 引擎涡轮叶片（电光蓝，6片旋转）
+    ctx.fillStyle = C_ELECTRIC;
+    ctx.globalAlpha = 0.7;
+    for (let i = 0; i < 6; i++) {
+      const ang = (i / 6) * Math.PI * 2 + this.animFrame * 0.15;
+      ctx.save();
+      ctx.rotate(ang);
+      ctx.fillRect(-0.1 * px, -1.2 * px, 0.2 * px, 1.2 * px);
+      ctx.restore();
+    }
+    ctx.globalAlpha = 1;
+    // 引擎中心核心（银白发光）
+    ctx.fillStyle = C_WHITE;
+    ctx.globalAlpha = 0.9;
+    ctx.beginPath();
+    ctx.arc(0, 0, 0.4 * px, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.globalAlpha = 1;
+    // 引擎外发光晕（霓虹青）
+    ctx.fillStyle = C_NEON_CYAN;
+    ctx.globalAlpha = 0.25;
+    ctx.beginPath();
+    ctx.arc(0, 0, 2.3 * px, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.globalAlpha = 1;
+
+    ctx.restore();
+
+    // === 右涡轮引擎 ===
+    ctx.save();
+    ctx.translate(9 * px, 5.5 * px);
+
+    ctx.fillStyle = C_COBALT;
+    ctx.beginPath();
+    ctx.arc(0, 0, 1.8 * px, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = C_GOLD;
+    ctx.lineWidth = 0.25 * px;
+    ctx.stroke();
+    ctx.fillStyle = C_DEEP_BLUE;
+    ctx.beginPath();
+    ctx.arc(0, 0, 1.3 * px, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = C_ELECTRIC;
+    ctx.globalAlpha = 0.7;
+    for (let i = 0; i < 6; i++) {
+      const ang = (i / 6) * Math.PI * 2 + this.animFrame * 0.15;
+      ctx.save();
+      ctx.rotate(ang);
+      ctx.fillRect(-0.1 * px, -1.2 * px, 0.2 * px, 1.2 * px);
+      ctx.restore();
+    }
+    ctx.globalAlpha = 1;
+    ctx.fillStyle = C_WHITE;
+    ctx.globalAlpha = 0.9;
+    ctx.beginPath();
+    ctx.arc(0, 0, 0.4 * px, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.globalAlpha = 1;
+    ctx.fillStyle = C_NEON_CYAN;
+    ctx.globalAlpha = 0.25;
+    ctx.beginPath();
+    ctx.arc(0, 0, 2.3 * px, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.globalAlpha = 1;
+
+    ctx.restore();
+
+    // 引擎连接管道（金色，从涡轮到腰带）
+    ctx.fillStyle = C_GOLD;
+    ctx.fillRect(4.7 * px, 7 * px, 0.6 * px, 1.5 * px);
+    ctx.fillRect(8.7 * px, 7 * px, 0.6 * px, 1.5 * px);
+    // 管道发光线（霓虹青）
+    ctx.fillStyle = C_NEON_CYAN;
     ctx.globalAlpha = 0.6;
-    ctx.fillRect(4.5 * px, 7 * px, 1.5 * px, 2 * px);
-    ctx.globalAlpha = 0.3;
-    ctx.fillRect(4.2 * px, 8 * px, 2 * px, 3 * px);
+    ctx.fillRect(4.8 * px, 7 * px, 0.4 * px, 1.5 * px);
+    ctx.fillRect(8.8 * px, 7 * px, 0.4 * px, 1.5 * px);
     ctx.globalAlpha = 1;
 
-    // === 后臂 (下垂，身体后方) ===
-    ctx.fillStyle = '#1E1E35';
+    // === 战术胸甲 ===
+    ctx.fillStyle = C_DEEP_BLUE;
+    ctx.fillRect(5.5 * px, 4 * px, 7 * px, 4.5 * px);
+    ctx.fillStyle = C_COBALT;
+    ctx.fillRect(7 * px, 4.2 * px, 4 * px, 4 * px);
+    ctx.fillStyle = C_JEWEL;
+    ctx.fillRect(10.5 * px, 4.2 * px, 1.2 * px, 4 * px);
+    ctx.fillStyle = C_BRIGHT_BLUE;
+    ctx.fillRect(11.5 * px, 4.5 * px, 0.4 * px, 3 * px);
+    ctx.fillStyle = C_BLACK;
+    ctx.fillRect(5.5 * px, 4 * px, 1.5 * px, 4.5 * px);
+    // 胸甲金边接缝
+    ctx.fillStyle = C_GOLD;
+    ctx.fillRect(7 * px, 4.2 * px, 4 * px, 0.15 * px);
+    ctx.fillRect(7 * px, 6 * px, 4 * px, 0.15 * px);
+    ctx.fillRect(7 * px, 7.5 * px, 4 * px, 0.15 * px);
+
+    // === 胸甲十字能量纹 ===
+    ctx.fillStyle = C_NEON_CYAN;
+    ctx.globalAlpha = 0.8;
+    ctx.fillRect(8.7 * px, 4.5 * px, 0.6 * px, 3.5 * px);
+    ctx.fillRect(7.5 * px, 5.8 * px, 3 * px, 0.6 * px);
+    ctx.globalAlpha = 1;
+    ctx.fillStyle = C_WHITE;
+    ctx.globalAlpha = 0.9;
+    ctx.fillRect(8.6 * px, 5.7 * px, 0.8 * px, 0.8 * px);
+    ctx.globalAlpha = 1;
+    ctx.fillStyle = C_ELECTRIC;
+    ctx.fillRect(8.85 * px, 4.4 * px, 0.3 * px, 0.3 * px);
+    ctx.fillRect(8.85 * px, 8 * px, 0.3 * px, 0.3 * px);
+    ctx.fillRect(7.3 * px, 5.85 * px, 0.3 * px, 0.3 * px);
+    ctx.fillRect(10.4 * px, 5.85 * px, 0.3 * px, 0.3 * px);
+
+    // 胸前能量核心徽章
+    const coreGlow = 0.6 + Math.sin(this.animFrame * 0.15) * 0.4;
+    ctx.fillStyle = C_GOLD;
+    ctx.fillRect(9.5 * px, 4.8 * px, 2 * px, 2 * px);
+    ctx.fillStyle = C_GOLD_DARK;
+    ctx.fillRect(9.5 * px, 6.5 * px, 2 * px, 0.3 * px);
+    ctx.fillStyle = C_GREEN;
+    ctx.globalAlpha = coreGlow;
+    ctx.fillRect(10 * px, 5.3 * px, 1 * px, 1 * px);
+    ctx.globalAlpha = 1;
+    ctx.fillStyle = C_WHITE;
+    ctx.fillRect(10.1 * px, 5.4 * px, 0.3 * px, 0.3 * px);
+
+    // 胸甲紫色能量纹
+    ctx.fillStyle = C_DARK_PURPLE;
+    ctx.fillRect(7.5 * px, 7.5 * px, 3 * px, 0.3 * px);
+
+    // 红色警示灯
+    ctx.fillStyle = C_RED;
+    ctx.fillRect(6 * px, 4.5 * px, 0.6 * px, 0.6 * px);
+    ctx.fillStyle = C_DARK_RED;
+    ctx.fillRect(6 * px, 5 * px, 0.6 * px, 0.2 * px);
+
+    // === 肩甲（蓝金 + 能量发光带）===
+    // 后肩甲
+    ctx.fillStyle = C_COBALT;
+    ctx.fillRect(4.5 * px, 3.5 * px, 2 * px, 1.5 * px);
+    ctx.fillStyle = C_BRIGHT_BLUE;
+    ctx.fillRect(4.5 * px, 3.5 * px, 0.4 * px, 1.5 * px);
+    ctx.fillStyle = C_GOLD;
+    ctx.fillRect(5 * px, 3.8 * px, 1 * px, 0.3 * px);
+    ctx.fillStyle = C_ORANGE;
+    ctx.fillRect(5.2 * px, 4.2 * px, 0.6 * px, 0.3 * px);
+    ctx.fillStyle = C_SILVER;
+    ctx.fillRect(5.5 * px, 3.6 * px, 0.3 * px, 0.3 * px);
+    ctx.fillStyle = C_SILVER_DARK;
+    ctx.fillRect(5.5 * px, 3.85 * px, 0.3 * px, 0.1 * px);
+    // 后肩能量发光带
+    ctx.fillStyle = C_ELECTRIC;
+    ctx.globalAlpha = 0.8;
+    ctx.fillRect(4.7 * px, 3.7 * px, 0.2 * px, 1.2 * px);
+    ctx.fillStyle = C_BRIGHT_BLUE;
+    ctx.globalAlpha = 0.6;
+    ctx.fillRect(4.9 * px, 3.7 * px, 0.15 * px, 1.2 * px);
+    ctx.globalAlpha = 1;
+
+    // 前肩甲
+    ctx.fillStyle = C_COBALT;
+    ctx.fillRect(11.5 * px, 3.8 * px, 1.5 * px, 1.5 * px);
+    ctx.fillStyle = C_BRIGHT_BLUE;
+    ctx.fillRect(12.6 * px, 3.8 * px, 0.4 * px, 1.5 * px);
+    ctx.fillStyle = C_GOLD;
+    ctx.fillRect(11.8 * px, 4.2 * px, 0.8 * px, 0.3 * px);
+    ctx.fillStyle = C_ORANGE;
+    ctx.fillRect(12 * px, 4.6 * px, 0.5 * px, 0.3 * px);
+    ctx.fillStyle = C_ELECTRIC;
+    ctx.globalAlpha = 0.8;
+    ctx.fillRect(12.4 * px, 4 * px, 0.2 * px, 1.2 * px);
+    ctx.fillStyle = C_BRIGHT_BLUE;
+    ctx.globalAlpha = 0.6;
+    ctx.fillRect(12.2 * px, 4 * px, 0.15 * px, 1.2 * px);
+    ctx.globalAlpha = 1;
+
+    // === 后臂（左能量手枪 - 平举向身侧）===
+    ctx.fillStyle = C_COBALT;
     ctx.fillRect(4.8 * px, 5 * px, 1.5 * px, 3.5 * px);
+    ctx.fillStyle = C_DEEP_BLUE;
+    ctx.fillRect(4.8 * px, 5 * px, 0.4 * px, 3.5 * px);
+    ctx.fillStyle = C_GOLD;
+    ctx.fillRect(4.8 * px, 6.5 * px, 1.5 * px, 0.15 * px);
+    ctx.fillStyle = C_SILVER;
+    ctx.fillRect(4.85 * px, 6.55 * px, 0.3 * px, 0.3 * px);
     // 后臂护腕
-    ctx.fillStyle = '#2A2A45';
+    ctx.fillStyle = C_GOLD;
     ctx.fillRect(4.5 * px, 7.5 * px, 2 * px, 1 * px);
+    ctx.fillStyle = C_GOLD_DARK;
+    ctx.fillRect(4.5 * px, 8.3 * px, 2 * px, 0.2 * px);
+    ctx.fillStyle = C_LEATHER;
+    ctx.fillRect(4.8 * px, 8.5 * px, 1.5 * px, 0.8 * px);
 
-    // === 前臂 (持枪 - 向前伸出) ===
-    ctx.fillStyle = '#252540';
-    ctx.fillRect(11.5 * px, 4.5 * px, 2 * px, 2.5 * px);
-    // 前臂护腕
-    ctx.fillStyle = '#3A3A5A';
-    ctx.fillRect(11.5 * px, 5.5 * px, 2 * px, 1.2 * px);
-    // 护腕发光
-    ctx.fillStyle = '#00F5D4';
-    ctx.fillRect(11.7 * px, 5.8 * px, 1.5 * px, 0.4 * px);
-    // 手 (握枪)
-    ctx.fillStyle = '#B0A8C8';
-    ctx.fillRect(12 * px, 6.5 * px, 2 * px, 1.5 * px);
+    // === 左能量手枪（后手 - 平举向左）===
+    const pistolBX = 2.5 * px;
+    const pistolBY = 8.7 * px;
+    ctx.fillStyle = C_DEEP_BLUE;
+    ctx.fillRect(pistolBX, pistolBY, 2 * px, 1.8 * px);
+    ctx.fillStyle = C_COBALT;
+    ctx.fillRect(pistolBX + 0.2 * px, pistolBY + 0.2 * px, 1.6 * px, 1.4 * px);
+    ctx.fillStyle = C_GOLD;
+    ctx.fillRect(pistolBX, pistolBY, 2 * px, 0.2 * px);
+    ctx.fillStyle = C_ELECTRIC;
+    ctx.fillRect(pistolBX + 0.5 * px, pistolBY + 0.5 * px, 1 * px, 0.8 * px);
+    // 左枪枪管（向左伸出）
+    ctx.fillStyle = C_SILVER_DARK;
+    ctx.fillRect(pistolBX - 1.5 * px, pistolBY + 0.5 * px, 1.5 * px, 0.8 * px);
+    ctx.fillStyle = C_GOLD;
+    ctx.fillRect(pistolBX - 1.5 * px, pistolBY + 0.5 * px, 1.5 * px, 0.1 * px);
+    ctx.fillStyle = C_NEON_CYAN;
+    ctx.fillRect(pistolBX - 2 * px, pistolBY + 0.4 * px, 0.5 * px, 1 * px);
 
-    // === 能量步枪 (侧面视角) ===
-    const gunX = 13.5 * px;
-    const gunY = 5.5 * px;
-    // 枪托 (抵肩)
-    ctx.fillStyle = '#1A1A2E';
-    ctx.fillRect(gunX - 2 * px, gunY + 0.3 * px, 2.5 * px, 1.5 * px);
-    // 枪身主体
-    ctx.fillStyle = '#2A2A45';
-    ctx.fillRect(gunX + 0 * px, gunY, 11 * px, 2.2 * px);
-    // 枪身上部导轨
-    ctx.fillStyle = '#3A3A5A';
-    ctx.fillRect(gunX + 1 * px, gunY - 0.6 * px, 8 * px, 0.6 * px);
-    // 能量弹匣 (下方)
-    ctx.fillStyle = '#B026FF';
-    ctx.fillRect(gunX + 3 * px, gunY + 2 * px, 2 * px, 2.5 * px);
-    ctx.fillStyle = '#FF00FF';
-    ctx.fillRect(gunX + 3.3 * px, gunY + 2.3 * px, 1.4 * px, 1.8 * px);
-    // 瞄准镜
-    ctx.fillStyle = '#3A3A5A';
-    ctx.fillRect(gunX + 6 * px, gunY - 1.4 * px, 2.5 * px, 1.2 * px);
-    ctx.fillStyle = '#FF0080';
-    ctx.fillRect(gunX + 6.5 * px, gunY - 1.1 * px, 1.5 * px, 0.6 * px);
-    // 枪管
-    ctx.fillStyle = '#3A3A5A';
-    ctx.fillRect(gunX + 10 * px, gunY + 0.3 * px, 6 * px, 1.4 * px);
-    // 枪口能量环
-    ctx.fillStyle = '#00F5D4';
-    ctx.fillRect(gunX + 15 * px, gunY + 0.1 * px, 1.2 * px, 1.8 * px);
-
-    // 枪口火焰 / 能量爆发 (侧面)
+    // 左枪枪口火焰
     if (isShooting) {
-      const flashX = gunX + 16 * px;
-      const flashY = gunY;
-      // 核心白
-      ctx.fillStyle = '#FFFFFF';
+      ctx.fillStyle = C_WHITE;
+      ctx.fillRect(pistolBX - 3 * px, pistolBY + 0.3 * px, 1.2 * px, 1 * px);
+      ctx.fillStyle = C_NEON_CYAN;
+      ctx.globalAlpha = 0.7;
+      ctx.fillRect(pistolBX - 4 * px, pistolBY - 0.2 * px, 2 * px, 2 * px);
+      ctx.fillStyle = C_PURPLE;
+      ctx.globalAlpha = 0.4;
+      ctx.fillRect(pistolBX - 5 * px, pistolBY - 0.8 * px, 3 * px, 3 * px);
+      ctx.globalAlpha = 1;
+    }
+
+    // === 前臂（右能量手枪 - 平举向前）===
+    ctx.fillStyle = C_COBALT;
+    ctx.fillRect(11.5 * px, 4.5 * px, 2 * px, 2.5 * px);
+    ctx.fillStyle = C_JEWEL;
+    ctx.fillRect(13 * px, 4.7 * px, 0.4 * px, 2 * px);
+    ctx.fillStyle = C_GOLD;
+    ctx.fillRect(11.5 * px, 5.5 * px, 2 * px, 0.15 * px);
+    ctx.fillStyle = C_SILVER;
+    ctx.fillRect(11.55 * px, 5.55 * px, 0.3 * px, 0.3 * px);
+    ctx.fillStyle = C_GOLD;
+    ctx.fillRect(11.5 * px, 5.5 * px, 2 * px, 1.2 * px);
+    ctx.fillStyle = C_GOLD_DARK;
+    ctx.fillRect(11.5 * px, 6.5 * px, 2 * px, 0.2 * px);
+    ctx.fillStyle = C_NEON_CYAN;
+    ctx.fillRect(11.7 * px, 5.8 * px, 1.5 * px, 0.3 * px);
+    ctx.fillStyle = C_LEATHER;
+    ctx.fillRect(12 * px, 6.5 * px, 2 * px, 1.5 * px);
+    ctx.fillStyle = C_LEATHER_DARK;
+    ctx.fillRect(12.2 * px, 7.5 * px, 0.4 * px, 0.4 * px);
+    ctx.fillRect(12.8 * px, 7.5 * px, 0.4 * px, 0.4 * px);
+
+    // === 右能量手枪（前手 - 平举向前）===
+    const pistolX = 13.5 * px;
+    const pistolY = 6 * px;
+    ctx.fillStyle = C_DEEP_BLUE;
+    ctx.fillRect(pistolX, pistolY, 2.5 * px, 1.8 * px);
+    ctx.fillStyle = C_COBALT;
+    ctx.fillRect(pistolX + 0.2 * px, pistolY + 0.2 * px, 2.1 * px, 1.4 * px);
+    ctx.fillStyle = C_GOLD;
+    ctx.fillRect(pistolX, pistolY, 2.5 * px, 0.2 * px);
+    ctx.fillRect(pistolX, pistolY + 1.6 * px, 2.5 * px, 0.15 * px);
+    ctx.fillStyle = C_GOLD;
+    ctx.fillRect(pistolX + 0.8 * px, pistolY + 1.8 * px, 0.8 * px, 1.2 * px);
+    ctx.fillStyle = C_ELECTRIC;
+    ctx.fillRect(pistolX + 0.9 * px, pistolY + 1.9 * px, 0.6 * px, 1 * px);
+    ctx.fillStyle = C_NEON_CYAN;
+    ctx.fillRect(pistolX + 0.3 * px, pistolY + 0.8 * px, 2 * px, 0.2 * px);
+    ctx.fillStyle = C_SILVER_DARK;
+    ctx.fillRect(pistolX + 2.5 * px, pistolY + 0.3 * px, 2.5 * px, 1.2 * px);
+    ctx.fillStyle = C_SILVER;
+    ctx.fillRect(pistolX + 2.5 * px, pistolY + 0.3 * px, 2.5 * px, 0.2 * px);
+    ctx.fillStyle = C_NEON_CYAN;
+    ctx.fillRect(pistolX + 4.8 * px, pistolY + 0.2 * px, 0.7 * px, 1.4 * px);
+
+    // 右枪枪口火焰
+    if (isShooting) {
+      const flashX = pistolX + 5.5 * px;
+      const flashY = pistolY;
+      ctx.fillStyle = C_WHITE;
       ctx.fillRect(flashX, flashY + 0.3 * px, 2.5 * px, 1 * px);
-      // 青色能量
-      ctx.fillStyle = '#00F5D4';
+      ctx.fillStyle = C_GOLD;
       ctx.fillRect(flashX - 0.5 * px, flashY - 0.2 * px, 3.5 * px, 2 * px);
-      // 紫色外层
-      ctx.fillStyle = '#B026FF';
+      ctx.fillStyle = C_NEON_CYAN;
       ctx.globalAlpha = 0.7;
       ctx.fillRect(flashX + 1.5 * px, flashY - 0.8 * px, 3.5 * px, 3 * px);
       ctx.globalAlpha = 1;
-      // 粉色光晕
-      ctx.fillStyle = '#FF0080';
+      ctx.fillStyle = C_PURPLE;
       ctx.globalAlpha = 0.4;
       ctx.fillRect(flashX + 3 * px, flashY - 1.5 * px, 5 * px, 4.5 * px);
       ctx.globalAlpha = 1;
     }
 
-    // === 脖子 (侧面) ===
-    ctx.fillStyle = '#C4B0D0';
+    // === 脖子 ===
+    ctx.fillStyle = '#C8B8D8';
     ctx.fillRect(8.5 * px, 2.5 * px, 3 * px, 1.8 * px);
-    // 脖子阴影
     ctx.fillStyle = '#9A8AA8';
     ctx.fillRect(8.5 * px, 2.8 * px, 1 * px, 1.3 * px);
 
-    // === 头部 (侧面视角 - 露出脸部!) ===
-    // 后脑头发 (略长，更飘逸)
-    ctx.fillStyle = '#2D2540';
-    ctx.fillRect(6.5 * px, -2 * px, 2.5 * px, 4.5 * px);
-    ctx.fillRect(5.5 * px, -1 * px, 1.5 * px, 3 * px);
-    // 头顶头发 (更高，更有型)
-    ctx.fillStyle = '#3D3550';
-    ctx.fillRect(6.5 * px, -3.5 * px, 5 * px, 1.5 * px);
-    // 头顶尖角 (英挺感)
-    ctx.fillRect(7.5 * px, -4 * px, 3 * px, 0.5 * px);
-    ctx.fillRect(8.5 * px, -4.3 * px, 1.5 * px, 0.4 * px);
-    // 刘海前侧 (侧分，更英俊)
-    ctx.fillStyle = '#3D3550';
-    ctx.fillRect(9.5 * px, -2.5 * px, 3 * px, 1.2 * px);
-    // 鬓角下垂 (精致脸型修饰)
-    ctx.fillRect(11 * px, -3 * px, 1.5 * px, 0.8 * px);
-    // 头发高光 (光泽感)
-    ctx.fillStyle = '#5A4A6A';
-    ctx.fillRect(7 * px, -3 * px, 1.5 * px, 0.4 * px);
-    ctx.fillRect(9 * px, -3.2 * px, 1 * px, 0.3 * px);
+    // === 头盔主体（深海蓝）===
+    ctx.fillStyle = C_DEEP_BLUE;
+    ctx.fillRect(6.5 * px, -3.5 * px, 6 * px, 6 * px);
 
-    // 脸部 (侧面 - 完全露出，更精致轮廓)
-    // 肤色
-    ctx.fillStyle = '#E8C8A8';
-    ctx.fillRect(8.5 * px, -2 * px, 4 * px, 4.5 * px);
-    // 脸部暗部 (靠近耳朵)
-    ctx.fillStyle = '#D4A888';
-    ctx.fillRect(8.5 * px, -1.5 * px, 1 * px, 3.5 * px);
-    // 脸部高光 (前额鼻梁)
-    ctx.fillStyle = '#F5D8B8';
-    ctx.fillRect(11 * px, -1.8 * px, 1.5 * px, 2 * px);
-    // 额头线条 (更显轮廓)
-    ctx.fillStyle = '#E8C8A8';
-    ctx.fillRect(10 * px, -1.5 * px, 1 * px, 0.5 * px);
+    // 头盔顶脊（多段渐层）
+    ctx.fillStyle = C_COBALT;
+    ctx.fillRect(6.5 * px, -3.5 * px, 6 * px, 0.5 * px);
+    ctx.fillStyle = C_JEWEL;
+    ctx.fillRect(7 * px, -3.6 * px, 5 * px, 0.25 * px);
+    ctx.fillStyle = C_GOLD;
+    ctx.fillRect(7.4 * px, -3.7 * px, 4.2 * px, 0.15 * px);
+    ctx.fillStyle = C_GOLD_LIGHT;
+    ctx.fillRect(9 * px, -3.75 * px, 1 * px, 0.15 * px);
 
-    // 眉毛 (英挺剑眉，更锐利)
-    ctx.fillStyle = '#2D2540';
-    ctx.fillRect(10 * px, -0.8 * px, 1.8 * px, 0.4 * px);
-    ctx.fillRect(10.5 * px, -1 * px, 1.3 * px, 0.3 * px);
-    // 眉骨阴影 (更立体)
-    ctx.fillStyle = '#C49878';
-    ctx.fillRect(10 * px, -0.5 * px, 1.8 * px, 0.2 * px);
+    // === 顶部脊饰（前/中/后多段造型）===
+    ctx.fillStyle = C_GOLD_DARK;
+    ctx.fillRect(6.8 * px, -4 * px, 0.9 * px, 0.5 * px); // 前段脊座
+    ctx.fillRect(11.3 * px, -4 * px, 0.9 * px, 0.5 * px); // 后段脊座
+    ctx.fillStyle = C_GOLD;
+    ctx.fillRect(6.9 * px, -4.2 * px, 0.5 * px, 0.25 * px); // 前段脊尖
+    ctx.fillRect(11.5 * px, -4.2 * px, 0.5 * px, 0.25 * px); // 后段脊尖
+    // 中段能量条
+    ctx.fillStyle = C_NEON_CYAN;
+    ctx.fillRect(7.9 * px, -4 * px, 3.2 * px, 0.4 * px);
+    ctx.fillStyle = C_WHITE;
+    ctx.fillRect(8.8 * px, -4 * px, 1.4 * px, 0.4 * px); // 中央能量核心
+    ctx.fillStyle = C_NEON_CYAN;
+    ctx.globalAlpha = 0.4;
+    ctx.fillRect(7.5 * px, -4.5 * px, 4 * px, 0.5 * px); // 能量光晕
+    ctx.globalAlpha = 1;
 
-    // 眼睛 (侧面，锐利眼神)
-    ctx.fillStyle = '#1A1228';
-    ctx.fillRect(10.2 * px, -0.2 * px, 1.5 * px, 0.8 * px);
-    // 眼睛高光
-    ctx.fillStyle = '#00F5D4';
-    ctx.fillRect(10.8 * px, 0 * px, 0.6 * px, 0.5 * px);
-    // 睫毛 (更英俊)
-    ctx.fillStyle = '#1A1228';
-    ctx.fillRect(10.2 * px, -0.4 * px, 0.4 * px, 0.2 * px);
+    // === 侧棱与后脑接缝 ===
+    ctx.fillStyle = C_GOLD;
+    ctx.fillRect(7 * px, -3.3 * px, 5 * px, 0.25 * px); // 侧棱金线
+    ctx.fillStyle = C_GOLD_DARK;
+    ctx.fillRect(6.5 * px, -2.5 * px, 0.4 * px, 4 * px); // 左侧棱
+    ctx.fillRect(12.1 * px, -2.5 * px, 0.4 * px, 4 * px); // 右侧棱
+    ctx.fillStyle = C_BLACK;
+    ctx.fillRect(6.5 * px, -2 * px, 1 * px, 4 * px); // 后部
 
-    // 鼻梁 (更挺拔)
-    ctx.fillStyle = '#D4A888';
-    ctx.fillRect(11.5 * px, 0.3 * px, 1 * px, 1.5 * px);
-    // 鼻尖
-    ctx.fillStyle = '#C49878';
-    ctx.fillRect(12 * px, 1.5 * px, 0.6 * px, 0.4 * px);
-    // 鼻梁高光
-    ctx.fillStyle = '#F5D8B8';
-    ctx.fillRect(11.7 * px, 0.5 * px, 0.4 * px, 1 * px);
+    // === 后脑能量节点（紫宝石链）===
+    ctx.fillStyle = C_DARK_PURPLE;
+    ctx.fillRect(6.55 * px, -1.8 * px, 0.3 * px, 0.35 * px);
+    ctx.fillRect(6.55 * px, -0.5 * px, 0.3 * px, 0.35 * px);
+    ctx.fillRect(6.55 * px, 0.8 * px, 0.3 * px, 0.35 * px);
+    ctx.fillStyle = C_PURPLE;
+    ctx.fillRect(6.6 * px, -1.7 * px, 0.2 * px, 0.2 * px);
+    ctx.fillRect(6.6 * px, -0.4 * px, 0.2 * px, 0.2 * px);
+    ctx.fillRect(6.6 * px, 0.9 * px, 0.2 * px, 0.2 * px);
+    ctx.fillStyle = C_WHITE;
+    ctx.globalAlpha = 0.7;
+    ctx.fillRect(6.65 * px, -1.65 * px, 0.1 * px, 0.1 * px);
+    ctx.fillRect(6.65 * px, -0.35 * px, 0.1 * px, 0.1 * px);
+    ctx.fillRect(6.65 * px, 0.95 * px, 0.1 * px, 0.1 * px);
+    ctx.globalAlpha = 1;
 
-    // 嘴 (薄唇，更冷峻英俊)
-    ctx.fillStyle = '#B8786A';
-    ctx.fillRect(10.5 * px, 1.6 * px, 1.5 * px, 0.35 * px);
-    // 嘴角阴影
-    ctx.fillStyle = '#9A6858';
-    ctx.fillRect(10.5 * px, 1.7 * px, 0.3 * px, 0.2 * px);
+    // === 侧翼耳甲（左右展开包裹耳部）===
+    // 左耳甲
+    ctx.fillStyle = C_COBALT;
+    ctx.fillRect(5.5 * px, -1.6 * px, 1 * px, 2.6 * px);
+    ctx.fillStyle = C_DEEP_BLUE;
+    ctx.fillRect(5.3 * px, -1 * px, 0.5 * px, 2 * px);
+    ctx.fillStyle = C_GOLD;
+    ctx.fillRect(5.5 * px, -1.6 * px, 0.2 * px, 2.6 * px); // 前金边
+    ctx.fillStyle = C_GOLD_DARK;
+    ctx.fillRect(5.7 * px, -1.6 * px, 0.1 * px, 2.6 * px); // 内框
+    ctx.fillStyle = C_NEON_CYAN;
+    ctx.globalAlpha = 0.85;
+    ctx.fillRect(5.85 * px, -0.5 * px, 0.45 * px, 0.7 * px); // 耳甲能量点
+    ctx.globalAlpha = 1;
+    ctx.fillStyle = C_PURPLE;
+    ctx.fillRect(5.85 * px, 0.5 * px, 0.45 * px, 0.35 * px); // 通讯节点
+    ctx.fillStyle = C_SILVER;
+    ctx.fillRect(5.6 * px, -1.5 * px, 0.3 * px, 0.15 * px); // 上铆钉
+    // 右耳甲（镜像）
+    ctx.fillStyle = C_COBALT;
+    ctx.fillRect(12.5 * px, -1.6 * px, 1 * px, 2.6 * px);
+    ctx.fillStyle = C_DEEP_BLUE;
+    ctx.fillRect(13.2 * px, -1 * px, 0.5 * px, 2 * px);
+    ctx.fillStyle = C_GOLD;
+    ctx.fillRect(13.3 * px, -1.6 * px, 0.2 * px, 2.6 * px); // 后金边
+    ctx.fillStyle = C_GOLD_DARK;
+    ctx.fillRect(13.1 * px, -1.6 * px, 0.1 * px, 2.6 * px);
+    ctx.fillStyle = C_NEON_CYAN;
+    ctx.globalAlpha = 0.85;
+    ctx.fillRect(12.7 * px, -0.5 * px, 0.45 * px, 0.7 * px);
+    ctx.globalAlpha = 1;
+    ctx.fillStyle = C_PURPLE;
+    ctx.fillRect(12.7 * px, 0.5 * px, 0.45 * px, 0.35 * px);
+    ctx.fillStyle = C_SILVER;
+    ctx.fillRect(13.1 * px, -1.5 * px, 0.3 * px, 0.15 * px);
 
-    // 下颌线 (更明显的轮廓)
-    ctx.fillStyle = '#D4A888';
-    ctx.fillRect(10 * px, 2 * px, 2 * px, 0.5 * px);
-    // 尖下巴 (更英俊)
-    ctx.fillRect(10.5 * px, 2.3 * px, 1.5 * px, 0.4 * px);
-    // 下颌阴影 (立体感)
-    ctx.fillStyle = '#C49878';
-    ctx.fillRect(9.5 * px, 1.5 * px, 0.5 * px, 1 * px);
-    // 颧骨高光 (更立体)
-    ctx.fillStyle = '#F5D8B8';
-    ctx.fillRect(10.5 * px, 0.5 * px, 0.5 * px, 0.5 * px);
+    // === 多节通讯天线（V字形 - 底座+主杆+关节+顶段+发光球）===
+    // 左天线
+    ctx.save();
+    ctx.translate(7 * px, -3.2 * px);
+    ctx.rotate(-Math.PI / 6);
+    ctx.fillStyle = C_GOLD; // 底座
+    ctx.fillRect(-0.3 * px, -0.2 * px, 0.6 * px, 0.5 * px);
+    ctx.fillStyle = C_GOLD_DARK;
+    ctx.fillRect(-0.3 * px, 0.2 * px, 0.6 * px, 0.1 * px);
+    ctx.fillStyle = C_GOLD_DARK; // 主杆
+    ctx.fillRect(-0.08 * px, -1.2 * px, 0.16 * px, 1 * px);
+    ctx.fillStyle = C_SILVER; // 中段关节
+    ctx.beginPath();
+    ctx.arc(0, -1.3 * px, 0.2 * px, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = C_WHITE;
+    ctx.fillRect(-0.07 * px, -1.4 * px, 0.12 * px, 0.12 * px);
+    ctx.fillStyle = C_GOLD; // 顶段
+    ctx.fillRect(-0.05 * px, -2 * px, 0.1 * px, 0.7 * px);
+    ctx.fillStyle = C_ELECTRIC; // 顶端发光球
+    ctx.beginPath();
+    ctx.arc(0, -2.1 * px, 0.3 * px, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = C_NEON_CYAN;
+    ctx.globalAlpha = 0.9;
+    ctx.beginPath();
+    ctx.arc(0, -2.1 * px, 0.42 * px, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = C_WHITE;
+    ctx.beginPath();
+    ctx.arc(-0.05 * px, -2.15 * px, 0.14 * px, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = C_NEON_CYAN;
+    ctx.globalAlpha = 0.3;
+    ctx.beginPath();
+    ctx.arc(0, -2.1 * px, 0.75 * px, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.globalAlpha = 1;
+    ctx.restore();
+    // 右天线（镜像）
+    ctx.save();
+    ctx.translate(12 * px, -3.2 * px);
+    ctx.rotate(Math.PI / 6);
+    ctx.fillStyle = C_GOLD;
+    ctx.fillRect(-0.3 * px, -0.2 * px, 0.6 * px, 0.5 * px);
+    ctx.fillStyle = C_GOLD_DARK;
+    ctx.fillRect(-0.3 * px, 0.2 * px, 0.6 * px, 0.1 * px);
+    ctx.fillStyle = C_GOLD_DARK;
+    ctx.fillRect(-0.08 * px, -1.2 * px, 0.16 * px, 1 * px);
+    ctx.fillStyle = C_SILVER;
+    ctx.beginPath();
+    ctx.arc(0, -1.3 * px, 0.2 * px, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = C_WHITE;
+    ctx.fillRect(-0.07 * px, -1.4 * px, 0.12 * px, 0.12 * px);
+    ctx.fillStyle = C_GOLD;
+    ctx.fillRect(-0.05 * px, -2 * px, 0.1 * px, 0.7 * px);
+    ctx.fillStyle = C_ELECTRIC;
+    ctx.beginPath();
+    ctx.arc(0, -2.1 * px, 0.3 * px, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = C_NEON_CYAN;
+    ctx.globalAlpha = 0.9;
+    ctx.beginPath();
+    ctx.arc(0, -2.1 * px, 0.42 * px, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = C_WHITE;
+    ctx.beginPath();
+    ctx.arc(-0.05 * px, -2.15 * px, 0.14 * px, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = C_NEON_CYAN;
+    ctx.globalAlpha = 0.3;
+    ctx.beginPath();
+    ctx.arc(0, -2.1 * px, 0.75 * px, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.globalAlpha = 1;
+    ctx.restore();
 
-    // === 战术耳机 / 通讯器 ===
-    // 头带
-    ctx.fillStyle = '#1A1A2E';
-    ctx.fillRect(6.5 * px, -2.5 * px, 5.5 * px, 0.8 * px);
-    // 头带发光
-    ctx.fillStyle = '#B026FF';
-    ctx.fillRect(7 * px, -2.3 * px, 4.5 * px, 0.3 * px);
-    // 耳机耳罩
-    ctx.fillStyle = '#252540';
-    ctx.fillRect(6 * px, -2 * px, 1.5 * px, 2.5 * px);
-    // 耳机发光点
-    ctx.fillStyle = '#00F5D4';
-    ctx.fillRect(6.3 * px, -0.8 * px, 0.8 * px, 0.8 * px);
-    // 麦克风杆
-    ctx.fillStyle = '#252540';
-    ctx.fillRect(6.2 * px, 0.5 * px, 0.5 * px, 1.5 * px);
-    ctx.fillStyle = '#FF0080';
-    ctx.fillRect(6 * px, 1.8 * px, 1 * px, 0.6 * px);
+    // === 金色面甲（只覆盖上半脸 - 眼眉以上）===
+    ctx.fillStyle = C_GOLD;
+    ctx.fillRect(7.5 * px, -2 * px, 4 * px, 1.5 * px);
+    ctx.fillStyle = C_GOLD_DARK;
+    ctx.fillRect(7.5 * px, -0.6 * px, 4 * px, 0.15 * px); // 下沿
+    ctx.fillStyle = C_GOLD_LIGHT;
+    ctx.fillRect(7.6 * px, -1.9 * px, 0.3 * px, 1.3 * px); // 左高光
+    ctx.fillStyle = C_GOLD;
+    ctx.fillRect(7.5 * px, -2 * px, 4 * px, 0.12 * px); // 上沿亮线
+    // 面甲铆钉
+    ctx.fillStyle = C_SILVER;
+    ctx.fillRect(7.6 * px, -1.9 * px, 0.3 * px, 0.3 * px);
+    ctx.fillRect(11.1 * px, -1.9 * px, 0.3 * px, 0.3 * px);
+    ctx.fillStyle = C_SILVER_DARK;
+    ctx.fillRect(7.6 * px, -1.7 * px, 0.3 * px, 0.1 * px);
+    ctx.fillRect(11.1 * px, -1.7 * px, 0.3 * px, 0.1 * px);
 
-    // === 颈部护甲 (侧面) ===
-    ctx.fillStyle = '#3A3A5A';
+    // === 精致目镜（横向分两眼+上下高光+两端收窄）===
+    ctx.fillStyle = C_ELECTRIC;
+    ctx.fillRect(7.7 * px, -1.2 * px, 3.6 * px, 0.6 * px); // 主体
+    ctx.fillStyle = C_BLACK;
+    ctx.fillRect(9.4 * px, -1.2 * px, 0.2 * px, 0.6 * px); // 中间分隔
+    ctx.fillStyle = C_NEON_CYAN;
+    ctx.fillRect(7.8 * px, -1.1 * px, 1.4 * px, 0.2 * px); // 左眼上高光
+    ctx.fillRect(9.8 * px, -1.1 * px, 1.4 * px, 0.2 * px); // 右眼上高光
+    ctx.fillStyle = C_WHITE; // 瞳光
+    ctx.fillRect(8 * px, -1 * px, 0.5 * px, 0.1 * px);
+    ctx.fillRect(10.2 * px, -1 * px, 0.5 * px, 0.1 * px);
+    ctx.fillStyle = C_ELECTRIC;
+    ctx.globalAlpha = 0.4;
+    ctx.fillRect(7.5 * px, -1.4 * px, 4 * px, 1 * px); // 发光晕
+    ctx.globalAlpha = 1;
+
+    // === 下半脸（面甲下方露出，肤色底+鼻+嘴+下颌）===
+    ctx.fillStyle = '#D8C8E0'; // 肤色底（淡紫白）
+    ctx.fillRect(7.8 * px, -0.4 * px, 3.4 * px, 2.6 * px);
+    ctx.fillStyle = '#B8A8C8';
+    ctx.fillRect(7.8 * px, 1.8 * px, 3.4 * px, 0.4 * px); // 下颌阴影
+    ctx.fillStyle = '#E8D8F0'; // 颧骨高光
+    ctx.fillRect(8 * px, -0.3 * px, 0.3 * px, 0.5 * px);
+    ctx.fillRect(10.7 * px, -0.3 * px, 0.3 * px, 0.5 * px);
+    // 鼻子（小三角+鼻孔）
+    ctx.fillStyle = '#9A8AA8';
+    ctx.beginPath();
+    ctx.moveTo(9.5 * px, -0.3 * px);
+    ctx.lineTo(9.3 * px, 0.5 * px);
+    ctx.lineTo(9.7 * px, 0.5 * px);
+    ctx.closePath();
+    ctx.fill();
+    ctx.fillStyle = '#7A6A88';
+    ctx.fillRect(9.4 * px, 0.45 * px, 0.2 * px, 0.1 * px); // 鼻孔
+    ctx.fillStyle = '#B89AB8';
+    ctx.fillRect(9.55 * px, 0 * px, 0.1 * px, 0.4 * px); // 鼻梁高光
+    // 嘴（深色横线+上唇线）
+    ctx.fillStyle = '#5A3A48';
+    ctx.fillRect(9 * px, 0.85 * px, 1 * px, 0.12 * px);
+    ctx.fillStyle = '#8A5A6A';
+    ctx.fillRect(9.1 * px, 0.75 * px, 0.8 * px, 0.1 * px);
+    ctx.fillStyle = '#3A2A38';
+    ctx.fillRect(9.4 * px, 0.85 * px, 0.2 * px, 0.12 * px); // 嘴角
+    // 下颌线（金色勾勒）
+    ctx.fillStyle = C_GOLD_DARK;
+    ctx.fillRect(7.8 * px, 1.45 * px, 3.4 * px, 0.15 * px);
+    ctx.fillStyle = C_GOLD;
+    ctx.fillRect(7.8 * px, 1.45 * px, 3.4 * px, 0.08 * px);
+    ctx.fillStyle = C_GOLD_LIGHT;
+    ctx.fillRect(8.5 * px, 1.5 * px, 2 * px, 0.06 * px); // 下颌高光
+
+    // === 颈部护甲 ===
+    ctx.fillStyle = C_COBALT;
     ctx.fillRect(7.5 * px, 3.5 * px, 4.5 * px, 1 * px);
-    ctx.fillStyle = '#00F5D4';
+    ctx.fillStyle = C_GOLD;
+    ctx.fillRect(7.5 * px, 3.5 * px, 4.5 * px, 0.2 * px);
+    ctx.fillStyle = C_NEON_CYAN;
     ctx.globalAlpha = 0.5;
     ctx.fillRect(8.5 * px, 3.8 * px, 3 * px, 0.3 * px);
     ctx.globalAlpha = 1;
 
     ctx.restore(); // 上半身recoil
-    ctx.restore();
-    ctx.restore();
+    ctx.restore(); // 整体姿态后仰
   }
+
 
   private renderDrone(): void {
     const ctx = this.ctx;
@@ -6031,268 +6900,273 @@ expToNextLevel: Math.floor(10 + Math.pow(bs.level, 1.7) * 4 + bs.level * 4),
   }
 
   private renderClones(): void {
+    if (!this.cloneSpriteCache) {
+      this.rebuildCloneSprite();
+    }
     const ctx = this.ctx;
     const positions = this.getClonePositions();
-    const px = 1.5;
+    const sprite = this.cloneSpriteCache!;
+    const ox = this.cloneSpriteOriginX;
+    const oy = this.cloneSpriteOriginY;
 
     for (let i = 0; i < positions.length; i++) {
       const pos = positions[i];
-      ctx.save();
-      ctx.translate(pos.x, pos.y);
-
       const floatOffset = Math.sin(this.animFrame * 0.08 + i * 1.5) * 1.5;
-      ctx.translate(0, floatOffset);
-
-      ctx.globalAlpha = 0.85;
-
-      ctx.fillStyle = 'rgba(0,0,0,0.25)';
-      ctx.beginPath();
-      ctx.ellipse(0, 29, 9, 3, 0, 0, Math.PI * 2);
-      ctx.fill();
-
-      const armorColor = '#4A3A6A';
-      const armorDark = '#2D2345';
-      const armorLight = '#6B5AA0';
-      const accentColor = '#FFE600';
-      const accentColor2 = '#B026FF';
-
-      // === 重力靴 (右脚直立) ===
-      // 右脚 (前脚，直立)
-      ctx.fillStyle = '#1A1A2E';
-      ctx.fillRect(8 * px, 17 * px, 4.8 * px, 3 * px);
-      ctx.fillStyle = accentColor2;
-      ctx.fillRect(8 * px, 19.5 * px, 4.8 * px, 0.5 * px);
-      ctx.fillStyle = '#10101E';
-      ctx.fillRect(7.5 * px, 17.5 * px, 0.8 * px, 2 * px);
-      ctx.fillStyle = '#252540';
-      ctx.fillRect(8.5 * px, 15 * px, 3.8 * px, 2 * px);
-      ctx.fillStyle = accentColor2;
-      ctx.fillRect(8.5 * px, 15.8 * px, 3.8 * px, 0.4 * px);
-
-      // 右腿 (直立)
-      ctx.fillStyle = armorDark;
-      ctx.fillRect(8.5 * px, 9.5 * px, 3.2 * px, 5.5 * px);
-      ctx.fillStyle = '#1A1028';
-      ctx.fillRect(8.5 * px, 10 * px, 0.8 * px, 5 * px);
-      ctx.fillStyle = armorColor;
-      ctx.fillRect(10.9 * px, 10 * px, 0.8 * px, 5 * px);
-      ctx.fillStyle = armorColor;
-      ctx.fillRect(10.5 * px, 12 * px, 2 * px, 1.8 * px);
-      ctx.fillStyle = accentColor;
-      ctx.fillRect(11.1 * px, 12.5 * px, 0.7 * px, 0.9 * px);
-      ctx.fillStyle = '#1A1A2E';
-      ctx.fillRect(8.5 * px, 10.5 * px, 3.2 * px, 0.4 * px);
-
-      // === 战术裤 + 左脚靴 (左腿45度向前抬起，整体旋转) ===
       ctx.save();
-      ctx.translate(7.5 * px, 9.5 * px);
-      ctx.rotate(-Math.PI / 4); // 45度向前抬起
-
-      // 左腿
-      ctx.fillStyle = armorDark;
-      ctx.fillRect(0, 0, 3 * px, 5.5 * px);
-      ctx.fillStyle = '#1A1028';
-      ctx.fillRect(0, 0.5 * px, 0.8 * px, 5 * px);
-      ctx.fillStyle = armorColor;
-      ctx.fillRect(2.3 * px, 0.5 * px, 0.7 * px, 5 * px);
-      ctx.fillStyle = armorColor;
-      ctx.fillRect(2.7 * px, 2.5 * px, 2 * px, 1.8 * px);
-      ctx.fillStyle = accentColor;
-      ctx.fillRect(3.3 * px, 3 * px, 0.7 * px, 0.9 * px);
-      ctx.fillStyle = '#1A1A2E';
-      ctx.fillRect(0, 1 * px, 3 * px, 0.4 * px);
-
-      // 左脚靴 (相对腿末端，跟随旋转)
-      ctx.fillStyle = '#1A1A2E';
-      ctx.fillRect(-0.5 * px, 5.5 * px, 4.5 * px, 3 * px);
-      ctx.fillStyle = accentColor2;
-      ctx.fillRect(-0.5 * px, 8 * px, 4.5 * px, 0.5 * px);
-      ctx.fillStyle = '#10101E';
-      ctx.fillRect(-1 * px, 6 * px, 0.8 * px, 2 * px);
-      ctx.fillStyle = '#252540';
-      ctx.fillRect(0 * px, 3.5 * px, 3.5 * px, 2 * px);
-      ctx.fillStyle = accentColor2;
-      ctx.fillRect(0 * px, 4.3 * px, 3.5 * px, 0.4 * px);
-
-      ctx.restore();
-
-      ctx.fillStyle = '#1A1A2E';
-      ctx.fillRect(6 * px, 8.5 * px, 6 * px, 1.2 * px);
-      ctx.fillStyle = accentColor;
-      ctx.fillRect(6 * px, 8.9 * px, 6 * px, 0.3 * px);
-      ctx.fillStyle = accentColor2;
-      ctx.fillRect(11.5 * px, 8.3 * px, 1 * px, 1.6 * px);
-
-      ctx.fillStyle = armorColor;
-      ctx.fillRect(5.5 * px, 4 * px, 7 * px, 4.5 * px);
-      ctx.fillStyle = armorDark;
-      ctx.fillRect(5.5 * px, 4 * px, 1.5 * px, 4.5 * px);
-      ctx.fillStyle = armorLight;
-      ctx.fillRect(11 * px, 4.2 * px, 1.2 * px, 4 * px);
-
-      const coreGlow = 0.6 + Math.sin(this.animFrame * 0.15 + i) * 0.4;
-      ctx.fillStyle = accentColor;
-      ctx.globalAlpha = coreGlow;
-      ctx.fillRect(11 * px, 5 * px, 1.5 * px, 2 * px);
-      ctx.globalAlpha = 1;
-      ctx.fillStyle = '#FFFFFF';
-      ctx.fillRect(11.3 * px, 5.5 * px, 1 * px, 1 * px);
-      ctx.globalAlpha = coreGlow * 0.3;
-      ctx.fillStyle = accentColor;
-      ctx.fillRect(10.5 * px, 4.5 * px, 2.5 * px, 3 * px);
-      ctx.globalAlpha = 1;
-
-      ctx.fillStyle = accentColor2;
-      ctx.fillRect(9 * px, 5 * px, 2 * px, 0.4 * px);
-      ctx.fillRect(9 * px, 6.5 * px, 2 * px, 0.4 * px);
-
-      ctx.fillStyle = armorLight;
-      ctx.fillRect(4.5 * px, 3.5 * px, 1.5 * px, 3.5 * px);
-      ctx.fillStyle = accentColor;
-      ctx.fillRect(4.8 * px, 3.8 * px, 0.8 * px, 0.6 * px);
-      ctx.fillStyle = accentColor;
-      ctx.globalAlpha = 0.6;
-      ctx.fillRect(4.5 * px, 7 * px, 1.5 * px, 2 * px);
-      ctx.globalAlpha = 0.3;
-      ctx.fillRect(4.2 * px, 8 * px, 2 * px, 3 * px);
-      ctx.globalAlpha = 1;
-
-      ctx.fillStyle = armorDark;
-      ctx.fillRect(4.8 * px, 5 * px, 1.5 * px, 3.5 * px);
-      ctx.fillStyle = armorColor;
-      ctx.fillRect(4.5 * px, 7.5 * px, 2 * px, 1 * px);
-
-      ctx.fillStyle = armorColor;
-      ctx.fillRect(11.5 * px, 4.5 * px, 2 * px, 2.5 * px);
-      ctx.fillStyle = armorLight;
-      ctx.fillRect(11.5 * px, 5.5 * px, 2 * px, 1.2 * px);
-      ctx.fillStyle = accentColor;
-      ctx.fillRect(11.7 * px, 5.8 * px, 1.5 * px, 0.4 * px);
-      ctx.fillStyle = '#B0A8C8';
-      ctx.fillRect(12 * px, 6.5 * px, 2 * px, 1.5 * px);
-
-      const gunX = 13.5 * px;
-      const gunY = 5.5 * px;
-      ctx.fillStyle = '#1A1A2E';
-      ctx.fillRect(gunX - 2 * px, gunY + 0.3 * px, 2.5 * px, 1.5 * px);
-      ctx.fillStyle = armorDark;
-      ctx.fillRect(gunX + 0 * px, gunY, 9 * px, 2.2 * px);
-      ctx.fillStyle = armorColor;
-      ctx.fillRect(gunX + 1 * px, gunY - 0.6 * px, 6 * px, 0.6 * px);
-      ctx.fillStyle = accentColor;
-      ctx.fillRect(gunX + 2.5 * px, gunY + 2 * px, 2 * px, 2.5 * px);
-      ctx.fillStyle = accentColor2;
-      ctx.fillRect(gunX + 2.8 * px, gunY + 2.3 * px, 1.4 * px, 1.8 * px);
-      ctx.fillStyle = armorColor;
-      ctx.fillRect(gunX + 8 * px, gunY + 0.3 * px, 4 * px, 1.4 * px);
-      ctx.fillStyle = accentColor;
-      ctx.fillRect(gunX + 11 * px, gunY + 0.1 * px, 1.2 * px, 1.8 * px);
-
-      ctx.fillStyle = '#C4B0D0';
-      ctx.fillRect(8.5 * px, 2.5 * px, 3 * px, 1.8 * px);
-      ctx.fillStyle = '#9A8AA8';
-      ctx.fillRect(8.5 * px, 2.8 * px, 1 * px, 1.3 * px);
-
-      // === 头部 (发型更英俊 + 脸型更精致) ===
-      // 后脑头发 (略长，更飘逸)
-      ctx.fillStyle = '#3D2A50';
-      ctx.fillRect(6.5 * px, -2 * px, 2.5 * px, 4.5 * px);
-      ctx.fillRect(5.5 * px, -1 * px, 1.5 * px, 3 * px);
-      // 头顶头发 (更高，更有型)
-      ctx.fillStyle = '#5A4270';
-      ctx.fillRect(6.5 * px, -3.5 * px, 5 * px, 1.5 * px);
-      // 头顶尖角 (英挺感)
-      ctx.fillRect(7.5 * px, -4 * px, 3 * px, 0.5 * px);
-      ctx.fillRect(8.5 * px, -4.3 * px, 1.5 * px, 0.4 * px);
-      // 刘海前侧 (侧分，更英俊)
-      ctx.fillStyle = '#5A4270';
-      ctx.fillRect(9.5 * px, -2.5 * px, 3 * px, 1.2 * px);
-      // 鬓角下垂
-      ctx.fillRect(11 * px, -3 * px, 1.5 * px, 0.8 * px);
-      // 头发高光
-      ctx.fillStyle = '#7A5A90';
-      ctx.fillRect(7 * px, -3 * px, 1.5 * px, 0.4 * px);
-      ctx.fillRect(9 * px, -3.2 * px, 1 * px, 0.3 * px);
-
-      // 脸部 (更精致轮廓)
-      ctx.fillStyle = '#E8C8A8';
-      ctx.fillRect(8.5 * px, -2 * px, 4 * px, 4.5 * px);
-      ctx.fillStyle = '#D4A888';
-      ctx.fillRect(8.5 * px, -1.5 * px, 1 * px, 3.5 * px);
-      ctx.fillStyle = '#F5D8B8';
-      ctx.fillRect(11 * px, -1.8 * px, 1.5 * px, 2 * px);
-      // 额头线条
-      ctx.fillStyle = '#E8C8A8';
-      ctx.fillRect(10 * px, -1.5 * px, 1 * px, 0.5 * px);
-
-      // 眉毛 (英挺剑眉，更锐利)
-      ctx.fillStyle = '#3D2540';
-      ctx.fillRect(10 * px, -0.8 * px, 1.8 * px, 0.4 * px);
-      ctx.fillRect(10.5 * px, -1 * px, 1.3 * px, 0.3 * px);
-      // 眉骨阴影 (更立体)
-      ctx.fillStyle = '#C49878';
-      ctx.fillRect(10 * px, -0.5 * px, 1.8 * px, 0.2 * px);
-
-      // 眼睛 (锐利眼神)
-      ctx.fillStyle = '#1A1228';
-      ctx.fillRect(10.2 * px, -0.2 * px, 1.5 * px, 0.8 * px);
-      ctx.fillStyle = accentColor;
-      ctx.fillRect(10.8 * px, 0 * px, 0.6 * px, 0.5 * px);
-      // 睫毛
-      ctx.fillStyle = '#1A1228';
-      ctx.fillRect(10.2 * px, -0.4 * px, 0.4 * px, 0.2 * px);
-
-      // 鼻梁 (更挺拔)
-      ctx.fillStyle = '#D4A888';
-      ctx.fillRect(11.5 * px, 0.3 * px, 1 * px, 1.5 * px);
-      // 鼻尖
-      ctx.fillStyle = '#C49878';
-      ctx.fillRect(12 * px, 1.5 * px, 0.6 * px, 0.4 * px);
-      // 鼻梁高光
-      ctx.fillStyle = '#F5D8B8';
-      ctx.fillRect(11.7 * px, 0.5 * px, 0.4 * px, 1 * px);
-
-      // 嘴 (薄唇，更冷峻英俊)
-      ctx.fillStyle = '#B8786A';
-      ctx.fillRect(10.5 * px, 1.6 * px, 1.5 * px, 0.35 * px);
-      // 嘴角阴影
-      ctx.fillStyle = '#9A6858';
-      ctx.fillRect(10.5 * px, 1.7 * px, 0.3 * px, 0.2 * px);
-
-      // 下颌线 (更明显的轮廓)
-      ctx.fillStyle = '#D4A888';
-      ctx.fillRect(10 * px, 2 * px, 2 * px, 0.5 * px);
-      // 尖下巴
-      ctx.fillRect(10.5 * px, 2.3 * px, 1.5 * px, 0.4 * px);
-      // 下颌阴影 (立体感)
-      ctx.fillStyle = '#C49878';
-      ctx.fillRect(9.5 * px, 1.5 * px, 0.5 * px, 1 * px);
-      // 颧骨高光
-      ctx.fillStyle = '#F5D8B8';
-      ctx.fillRect(10.5 * px, 0.5 * px, 0.5 * px, 0.5 * px);
-
-      ctx.fillStyle = '#1A1A2E';
-      ctx.fillRect(6.5 * px, -2.5 * px, 5.5 * px, 0.8 * px);
-      ctx.fillStyle = accentColor;
-      ctx.fillRect(7 * px, -2.3 * px, 4.5 * px, 0.3 * px);
-      ctx.fillStyle = '#252540';
-      ctx.fillRect(6 * px, -2 * px, 1.5 * px, 2.5 * px);
-      ctx.fillStyle = accentColor;
-      ctx.fillRect(6.3 * px, -0.8 * px, 0.8 * px, 0.8 * px);
-      ctx.fillStyle = '#252540';
-      ctx.fillRect(6.2 * px, 0.5 * px, 0.5 * px, 1.5 * px);
-      ctx.fillStyle = accentColor2;
-      ctx.fillRect(6 * px, 1.8 * px, 1 * px, 0.6 * px);
-
-      ctx.fillStyle = armorLight;
-      ctx.fillRect(7.5 * px, 3.5 * px, 4.5 * px, 1 * px);
-      ctx.fillStyle = accentColor;
-      ctx.globalAlpha = 0.5;
-      ctx.fillRect(8.5 * px, 3.8 * px, 3 * px, 0.3 * px);
-      ctx.globalAlpha = 1;
-
+      ctx.globalAlpha = 0.85;
+      ctx.drawImage(sprite, pos.x - ox, pos.y - oy + floatOffset);
       ctx.restore();
     }
+  }
+
+  // 离屏 canvas 预渲染分身静态身体：约 150 次 fillRect 合并为 1 次 drawImage
+  // coreGlow 固定为中位值 0.6，丢失脉冲但保留发光质感
+  private rebuildCloneSprite(): void {
+    const px = 1.5;
+    // 身体边界：x∈[-2, 40]，y∈[-7, 32]，留余量后 60x60，原点 (15, 15)
+    const w = 60, h = 60;
+    const originX = 15, originY = 15;
+
+    if (!this.cloneSpriteCache) {
+      this.cloneSpriteCache = document.createElement('canvas');
+    }
+    const sprite = this.cloneSpriteCache;
+    sprite.width = w;
+    sprite.height = h;
+    const sctx = sprite.getContext('2d');
+    if (!sctx) return;
+    sctx.clearRect(0, 0, w, h);
+    sctx.save();
+    sctx.translate(originX, originY);
+
+    const ctx = sctx;
+
+    ctx.fillStyle = 'rgba(0,0,0,0.25)';
+    ctx.beginPath();
+    ctx.ellipse(0, 29, 9, 3, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    const armorColor = '#4A3A6A';
+    const armorDark = '#2D2345';
+    const armorLight = '#6B5AA0';
+    const accentColor = '#FFE600';
+    const accentColor2 = '#B026FF';
+
+    // === 重力靴 (右脚直立) ===
+    ctx.fillStyle = '#1A1A2E';
+    ctx.fillRect(8 * px, 17 * px, 4.8 * px, 3 * px);
+    ctx.fillStyle = accentColor2;
+    ctx.fillRect(8 * px, 19.5 * px, 4.8 * px, 0.5 * px);
+    ctx.fillStyle = '#10101E';
+    ctx.fillRect(7.5 * px, 17.5 * px, 0.8 * px, 2 * px);
+    ctx.fillStyle = '#252540';
+    ctx.fillRect(8.5 * px, 15 * px, 3.8 * px, 2 * px);
+    ctx.fillStyle = accentColor2;
+    ctx.fillRect(8.5 * px, 15.8 * px, 3.8 * px, 0.4 * px);
+
+    // 右腿 (直立)
+    ctx.fillStyle = armorDark;
+    ctx.fillRect(8.5 * px, 9.5 * px, 3.2 * px, 5.5 * px);
+    ctx.fillStyle = '#1A1028';
+    ctx.fillRect(8.5 * px, 10 * px, 0.8 * px, 5 * px);
+    ctx.fillStyle = armorColor;
+    ctx.fillRect(10.9 * px, 10 * px, 0.8 * px, 5 * px);
+    ctx.fillStyle = armorColor;
+    ctx.fillRect(10.5 * px, 12 * px, 2 * px, 1.8 * px);
+    ctx.fillStyle = accentColor;
+    ctx.fillRect(11.1 * px, 12.5 * px, 0.7 * px, 0.9 * px);
+    ctx.fillStyle = '#1A1A2E';
+    ctx.fillRect(8.5 * px, 10.5 * px, 3.2 * px, 0.4 * px);
+
+    // === 战术裤 + 左脚靴 (左腿45度向前抬起，整体旋转) ===
+    ctx.save();
+    ctx.translate(7.5 * px, 9.5 * px);
+    ctx.rotate(-Math.PI / 4);
+
+    ctx.fillStyle = armorDark;
+    ctx.fillRect(0, 0, 3 * px, 5.5 * px);
+    ctx.fillStyle = '#1A1028';
+    ctx.fillRect(0, 0.5 * px, 0.8 * px, 5 * px);
+    ctx.fillStyle = armorColor;
+    ctx.fillRect(2.3 * px, 0.5 * px, 0.7 * px, 5 * px);
+    ctx.fillStyle = armorColor;
+    ctx.fillRect(2.7 * px, 2.5 * px, 2 * px, 1.8 * px);
+    ctx.fillStyle = accentColor;
+    ctx.fillRect(3.3 * px, 3 * px, 0.7 * px, 0.9 * px);
+    ctx.fillStyle = '#1A1A2E';
+    ctx.fillRect(0, 1 * px, 3 * px, 0.4 * px);
+
+    ctx.fillStyle = '#1A1A2E';
+    ctx.fillRect(-0.5 * px, 5.5 * px, 4.5 * px, 3 * px);
+    ctx.fillStyle = accentColor2;
+    ctx.fillRect(-0.5 * px, 8 * px, 4.5 * px, 0.5 * px);
+    ctx.fillStyle = '#10101E';
+    ctx.fillRect(-1 * px, 6 * px, 0.8 * px, 2 * px);
+    ctx.fillStyle = '#252540';
+    ctx.fillRect(0 * px, 3.5 * px, 3.5 * px, 2 * px);
+    ctx.fillStyle = accentColor2;
+    ctx.fillRect(0 * px, 4.3 * px, 3.5 * px, 0.4 * px);
+
+    ctx.restore();
+
+    ctx.fillStyle = '#1A1A2E';
+    ctx.fillRect(6 * px, 8.5 * px, 6 * px, 1.2 * px);
+    ctx.fillStyle = accentColor;
+    ctx.fillRect(6 * px, 8.9 * px, 6 * px, 0.3 * px);
+    ctx.fillStyle = accentColor2;
+    ctx.fillRect(11.5 * px, 8.3 * px, 1 * px, 1.6 * px);
+
+    ctx.fillStyle = armorColor;
+    ctx.fillRect(5.5 * px, 4 * px, 7 * px, 4.5 * px);
+    ctx.fillStyle = armorDark;
+    ctx.fillRect(5.5 * px, 4 * px, 1.5 * px, 4.5 * px);
+    ctx.fillStyle = armorLight;
+    ctx.fillRect(11 * px, 4.2 * px, 1.2 * px, 4 * px);
+
+    // 核心发光（固定 alpha，原为脉冲）
+    const coreGlow = 0.6;
+    ctx.fillStyle = accentColor;
+    ctx.globalAlpha = coreGlow;
+    ctx.fillRect(11 * px, 5 * px, 1.5 * px, 2 * px);
+    ctx.globalAlpha = 1;
+    ctx.fillStyle = '#FFFFFF';
+    ctx.fillRect(11.3 * px, 5.5 * px, 1 * px, 1 * px);
+    ctx.globalAlpha = coreGlow * 0.3;
+    ctx.fillStyle = accentColor;
+    ctx.fillRect(10.5 * px, 4.5 * px, 2.5 * px, 3 * px);
+    ctx.globalAlpha = 1;
+
+    ctx.fillStyle = accentColor2;
+    ctx.fillRect(9 * px, 5 * px, 2 * px, 0.4 * px);
+    ctx.fillRect(9 * px, 6.5 * px, 2 * px, 0.4 * px);
+
+    ctx.fillStyle = armorLight;
+    ctx.fillRect(4.5 * px, 3.5 * px, 1.5 * px, 3.5 * px);
+    ctx.fillStyle = accentColor;
+    ctx.fillRect(4.8 * px, 3.8 * px, 0.8 * px, 0.6 * px);
+    ctx.fillStyle = accentColor;
+    ctx.globalAlpha = 0.6;
+    ctx.fillRect(4.5 * px, 7 * px, 1.5 * px, 2 * px);
+    ctx.globalAlpha = 0.3;
+    ctx.fillRect(4.2 * px, 8 * px, 2 * px, 3 * px);
+    ctx.globalAlpha = 1;
+
+    ctx.fillStyle = armorDark;
+    ctx.fillRect(4.8 * px, 5 * px, 1.5 * px, 3.5 * px);
+    ctx.fillStyle = armorColor;
+    ctx.fillRect(4.5 * px, 7.5 * px, 2 * px, 1 * px);
+
+    ctx.fillStyle = armorColor;
+    ctx.fillRect(11.5 * px, 4.5 * px, 2 * px, 2.5 * px);
+    ctx.fillStyle = armorLight;
+    ctx.fillRect(11.5 * px, 5.5 * px, 2 * px, 1.2 * px);
+    ctx.fillStyle = accentColor;
+    ctx.fillRect(11.7 * px, 5.8 * px, 1.5 * px, 0.4 * px);
+    ctx.fillStyle = '#B0A8C8';
+    ctx.fillRect(12 * px, 6.5 * px, 2 * px, 1.5 * px);
+
+    const gunX = 13.5 * px;
+    const gunY = 5.5 * px;
+    ctx.fillStyle = '#1A1A2E';
+    ctx.fillRect(gunX - 2 * px, gunY + 0.3 * px, 2.5 * px, 1.5 * px);
+    ctx.fillStyle = armorDark;
+    ctx.fillRect(gunX + 0 * px, gunY, 9 * px, 2.2 * px);
+    ctx.fillStyle = armorColor;
+    ctx.fillRect(gunX + 1 * px, gunY - 0.6 * px, 6 * px, 0.6 * px);
+    ctx.fillStyle = accentColor;
+    ctx.fillRect(gunX + 2.5 * px, gunY + 2 * px, 2 * px, 2.5 * px);
+    ctx.fillStyle = accentColor2;
+    ctx.fillRect(gunX + 2.8 * px, gunY + 2.3 * px, 1.4 * px, 1.8 * px);
+    ctx.fillStyle = armorColor;
+    ctx.fillRect(gunX + 8 * px, gunY + 0.3 * px, 4 * px, 1.4 * px);
+    ctx.fillStyle = accentColor;
+    ctx.fillRect(gunX + 11 * px, gunY + 0.1 * px, 1.2 * px, 1.8 * px);
+
+    ctx.fillStyle = '#C4B0D0';
+    ctx.fillRect(8.5 * px, 2.5 * px, 3 * px, 1.8 * px);
+    ctx.fillStyle = '#9A8AA8';
+    ctx.fillRect(8.5 * px, 2.8 * px, 1 * px, 1.3 * px);
+
+    // === 头部 ===
+    ctx.fillStyle = '#3D2A50';
+    ctx.fillRect(6.5 * px, -2 * px, 2.5 * px, 4.5 * px);
+    ctx.fillRect(5.5 * px, -1 * px, 1.5 * px, 3 * px);
+    ctx.fillStyle = '#5A4270';
+    ctx.fillRect(6.5 * px, -3.5 * px, 5 * px, 1.5 * px);
+    ctx.fillRect(7.5 * px, -4 * px, 3 * px, 0.5 * px);
+    ctx.fillRect(8.5 * px, -4.3 * px, 1.5 * px, 0.4 * px);
+    ctx.fillStyle = '#5A4270';
+    ctx.fillRect(9.5 * px, -2.5 * px, 3 * px, 1.2 * px);
+    ctx.fillRect(11 * px, -3 * px, 1.5 * px, 0.8 * px);
+    ctx.fillStyle = '#7A5A90';
+    ctx.fillRect(7 * px, -3 * px, 1.5 * px, 0.4 * px);
+    ctx.fillRect(9 * px, -3.2 * px, 1 * px, 0.3 * px);
+
+    ctx.fillStyle = '#E8C8A8';
+    ctx.fillRect(8.5 * px, -2 * px, 4 * px, 4.5 * px);
+    ctx.fillStyle = '#D4A888';
+    ctx.fillRect(8.5 * px, -1.5 * px, 1 * px, 3.5 * px);
+    ctx.fillStyle = '#F5D8B8';
+    ctx.fillRect(11 * px, -1.8 * px, 1.5 * px, 2 * px);
+    ctx.fillStyle = '#E8C8A8';
+    ctx.fillRect(10 * px, -1.5 * px, 1 * px, 0.5 * px);
+
+    ctx.fillStyle = '#3D2540';
+    ctx.fillRect(10 * px, -0.8 * px, 1.8 * px, 0.4 * px);
+    ctx.fillRect(10.5 * px, -1 * px, 1.3 * px, 0.3 * px);
+    ctx.fillStyle = '#C49878';
+    ctx.fillRect(10 * px, -0.5 * px, 1.8 * px, 0.2 * px);
+
+    ctx.fillStyle = '#1A1228';
+    ctx.fillRect(10.2 * px, -0.2 * px, 1.5 * px, 0.8 * px);
+    ctx.fillStyle = accentColor;
+    ctx.fillRect(10.8 * px, 0 * px, 0.6 * px, 0.5 * px);
+    ctx.fillStyle = '#1A1228';
+    ctx.fillRect(10.2 * px, -0.4 * px, 0.4 * px, 0.2 * px);
+
+    ctx.fillStyle = '#D4A888';
+    ctx.fillRect(11.5 * px, 0.3 * px, 1 * px, 1.5 * px);
+    ctx.fillStyle = '#C49878';
+    ctx.fillRect(12 * px, 1.5 * px, 0.6 * px, 0.4 * px);
+    ctx.fillStyle = '#F5D8B8';
+    ctx.fillRect(11.7 * px, 0.5 * px, 0.4 * px, 1 * px);
+
+    ctx.fillStyle = '#B8786A';
+    ctx.fillRect(10.5 * px, 1.6 * px, 1.5 * px, 0.35 * px);
+    ctx.fillStyle = '#9A6858';
+    ctx.fillRect(10.5 * px, 1.7 * px, 0.3 * px, 0.2 * px);
+
+    ctx.fillStyle = '#D4A888';
+    ctx.fillRect(10 * px, 2 * px, 2 * px, 0.5 * px);
+    ctx.fillRect(10.5 * px, 2.3 * px, 1.5 * px, 0.4 * px);
+    ctx.fillStyle = '#C49878';
+    ctx.fillRect(9.5 * px, 1.5 * px, 0.5 * px, 1 * px);
+    ctx.fillStyle = '#F5D8B8';
+    ctx.fillRect(10.5 * px, 0.5 * px, 0.5 * px, 0.5 * px);
+
+    ctx.fillStyle = '#1A1A2E';
+    ctx.fillRect(6.5 * px, -2.5 * px, 5.5 * px, 0.8 * px);
+    ctx.fillStyle = accentColor;
+    ctx.fillRect(7 * px, -2.3 * px, 4.5 * px, 0.3 * px);
+    ctx.fillStyle = '#252540';
+    ctx.fillRect(6 * px, -2 * px, 1.5 * px, 2.5 * px);
+    ctx.fillStyle = accentColor;
+    ctx.fillRect(6.3 * px, -0.8 * px, 0.8 * px, 0.8 * px);
+    ctx.fillStyle = '#252540';
+    ctx.fillRect(6.2 * px, 0.5 * px, 0.5 * px, 1.5 * px);
+    ctx.fillStyle = accentColor2;
+    ctx.fillRect(6 * px, 1.8 * px, 1 * px, 0.6 * px);
+
+    ctx.fillStyle = armorLight;
+    ctx.fillRect(7.5 * px, 3.5 * px, 4.5 * px, 1 * px);
+    ctx.fillStyle = accentColor;
+    ctx.globalAlpha = 0.5;
+    ctx.fillRect(8.5 * px, 3.8 * px, 3 * px, 0.3 * px);
+    ctx.globalAlpha = 1;
+
+    sctx.restore();
+    this.cloneSpriteOriginX = originX;
+    this.cloneSpriteOriginY = originY;
   }
 
   private renderBullets(): void {
@@ -6316,7 +7190,8 @@ expToNextLevel: Math.floor(10 + Math.pow(bs.level, 1.7) * 4 + bs.level * 4),
 
       ctx.save();
       ctx.translate(bullet.x, bullet.y);
-      ctx.rotate(angle);
+      // 性能优化：绝大多数玩家子弹角度为0，跳过 rotate 调用
+      if (angle !== 0) ctx.rotate(angle);
 
       if (hasWave) {
         this.renderWaveBullet(ctx, bw, bulletAny.wavePhase || 0, bulletAny.waveLvl || 1, bulletAny.cloneBullet ? bulletAny.cloneIdx : -1);
@@ -6480,9 +7355,13 @@ expToNextLevel: Math.floor(10 + Math.pow(bs.level, 1.7) * 4 + bs.level * 4),
     const cx = 0;
     const cy = 0;
 
+    // 性能优化：去除 shadowBlur，用外圈半透明圆模拟发光
+    ctx.fillStyle = 'rgba(136, 238, 255, 0.25)';
+    ctx.beginPath();
+    ctx.arc(cx, cy, 9, 0, Math.PI * 2);
+    ctx.fill();
+
     ctx.fillStyle = '#88EEFF';
-    ctx.shadowColor = '#88EEFF';
-    ctx.shadowBlur = 8;
 
     for (let i = 0; i < 6; i++) {
       const angle = (Math.PI * 2 / 6) * i;
@@ -6506,32 +7385,38 @@ expToNextLevel: Math.floor(10 + Math.pow(bs.level, 1.7) * 4 + bs.level * 4),
     ctx.arc(cx, cy, 2, 0, Math.PI * 2);
     ctx.fill();
 
-    ctx.shadowBlur = 0;
-
     const trailLen = 20;
+    ctx.fillStyle = '#88EEFF';
     for (let i = 1; i <= 3; i++) {
       const alpha = 0.8 - i * 0.25;
       const len = trailLen * i;
-      ctx.fillStyle = `rgba(136, 238, 255, ${alpha})`;
+      ctx.globalAlpha = alpha;
       ctx.fillRect(-len - bw / 2, -1 - i * 0.5, len, 2 + i);
     }
+    ctx.globalAlpha = 1;
 
     if (this.animFrame % 3 === 0) {
+      ctx.fillStyle = '#88EEFF';
       for (let i = 0; i < 3; i++) {
         const px = -bw / 2 - 15 - i * 6;
         const py = Math.sin(this.animFrame * 0.3 + i) * 2;
-        ctx.fillStyle = `rgba(136, 238, 255, ${0.4 - i * 0.1})`;
+        ctx.globalAlpha = 0.4 - i * 0.1;
         ctx.beginPath();
         ctx.arc(px, py, 1 + i * 0.5, 0, Math.PI * 2);
         ctx.fill();
       }
+      ctx.globalAlpha = 1;
     }
   }
 
   private renderBombBullet(ctx: CanvasRenderingContext2D, bw: number): void {
+    // 性能优化：去除 shadowBlur，用外圈半透明圆模拟发光
+    ctx.fillStyle = 'rgba(255, 102, 0, 0.3)';
+    ctx.beginPath();
+    ctx.arc(0, 0, 10, 0, Math.PI * 2);
+    ctx.fill();
+
     ctx.fillStyle = '#FF6600';
-    ctx.shadowColor = '#FF6600';
-    ctx.shadowBlur = 10;
 
     ctx.beginPath();
     ctx.moveTo(0, -4);
@@ -6559,18 +7444,18 @@ expToNextLevel: Math.floor(10 + Math.pow(bs.level, 1.7) * 4 + bs.level * 4),
     ctx.arc(0, -1, 1, 0, Math.PI * 2);
     ctx.fill();
 
-    ctx.shadowBlur = 0;
-
     const trailLen = 25;
+    ctx.fillStyle = '#FF6400';
     for (let i = 1; i <= 3; i++) {
       const alpha = 0.9 - i * 0.25;
       const len = trailLen * i;
-      ctx.fillStyle = `rgba(255, 100, 0, ${alpha})`;
+      ctx.globalAlpha = alpha;
       ctx.fillRect(-len - bw / 2, -1.5 - i * 0.5, len, 3 + i);
     }
-
-    ctx.fillStyle = 'rgba(255, 50, 0, 0.6)';
+    ctx.globalAlpha = 0.6;
+    ctx.fillStyle = '#FF3200';
     ctx.fillRect(-trailLen * 3 - bw / 2, -1, trailLen, 2);
+    ctx.globalAlpha = 1;
 
     if (this.animFrame % 2 === 0) {
       for (let i = 0; i < 4; i++) {
@@ -6585,10 +7470,13 @@ expToNextLevel: Math.floor(10 + Math.pow(bs.level, 1.7) * 4 + bs.level * 4),
   }
 
   private renderPoisonBullet(ctx: CanvasRenderingContext2D, bw: number): void {
-    ctx.fillStyle = '#66FF66';
-    ctx.shadowColor = '#66FF66';
-    ctx.shadowBlur = 6;
+    // 性能优化：去除 shadowBlur，用外圈半透明圆模拟发光
+    ctx.fillStyle = 'rgba(102, 255, 102, 0.25)';
+    ctx.beginPath();
+    ctx.arc(0, 0, 8, 0, Math.PI * 2);
+    ctx.fill();
 
+    ctx.fillStyle = '#66FF66';
     ctx.beginPath();
     ctx.arc(0, 0, 3, 0, Math.PI * 2);
     ctx.fill();
@@ -6609,34 +7497,39 @@ expToNextLevel: Math.floor(10 + Math.pow(bs.level, 1.7) * 4 + bs.level * 4),
       ctx.fill();
     }
 
-    ctx.shadowBlur = 0;
-
     const trailLen = 18;
+    ctx.fillStyle = '#64FF64';
     for (let i = 1; i <= 3; i++) {
       const alpha = 0.7 - i * 0.2;
       const len = trailLen * i;
-      ctx.fillStyle = `rgba(100, 255, 100, ${alpha})`;
+      ctx.globalAlpha = alpha;
       ctx.fillRect(-len - bw / 2, -1 - i * 0.5, len, 2 + i);
     }
+    ctx.globalAlpha = 1;
 
     if (this.animFrame % 2 === 0) {
+      ctx.fillStyle = '#64FF64';
       for (let i = 0; i < 3; i++) {
         const px = -bw / 2 - 10 - i * 7;
         const py = Math.sin(this.animFrame * 0.3 + i) * 3;
         const size = 1.5 + Math.sin(this.animFrame * 0.4 + i) * 0.5;
-        ctx.fillStyle = `rgba(100, 255, 100, ${0.3 - i * 0.08})`;
+        ctx.globalAlpha = 0.3 - i * 0.08;
         ctx.beginPath();
         ctx.arc(px, py, size, 0, Math.PI * 2);
         ctx.fill();
       }
+      ctx.globalAlpha = 1;
     }
   }
 
   private renderFireShotBullet(ctx: CanvasRenderingContext2D, bw: number): void {
-    ctx.fillStyle = '#FF6600';
-    ctx.shadowColor = '#FF6600';
-    ctx.shadowBlur = 12;
+    // 性能优化：去除 shadowBlur，用外圈半透明圆模拟发光
+    ctx.fillStyle = 'rgba(255, 102, 0, 0.3)';
+    ctx.beginPath();
+    ctx.arc(0, 0, 10, 0, Math.PI * 2);
+    ctx.fill();
 
+    ctx.fillStyle = '#FF6600';
     ctx.beginPath();
     ctx.moveTo(2, -3);
     ctx.lineTo(3, -2);
@@ -6670,22 +7563,25 @@ expToNextLevel: Math.floor(10 + Math.pow(bs.level, 1.7) * 4 + bs.level * 4),
       ctx.fill();
     }
 
-    ctx.shadowBlur = 0;
-
     const trailLen = 20;
+    ctx.fillStyle = '#FF6400';
     for (let i = 1; i <= 3; i++) {
       const alpha = 0.6 - i * 0.15;
       const len = trailLen * i;
-      ctx.fillStyle = `rgba(255, 100, 0, ${alpha})`;
+      ctx.globalAlpha = alpha;
       ctx.fillRect(-len - bw / 2, -1.5 - i * 0.5, len, 3 + i);
     }
+    ctx.globalAlpha = 1;
   }
 
   private renderPoisonShotBullet(ctx: CanvasRenderingContext2D, bw: number): void {
-    ctx.fillStyle = '#44CC44';
-    ctx.shadowColor = '#44CC44';
-    ctx.shadowBlur = 8;
+    // 性能优化：去除 shadowBlur，用外圈半透明圆模拟发光
+    ctx.fillStyle = 'rgba(68, 204, 68, 0.25)';
+    ctx.beginPath();
+    ctx.arc(0, 0, 9, 0, Math.PI * 2);
+    ctx.fill();
 
+    ctx.fillStyle = '#44CC44';
     ctx.beginPath();
     ctx.arc(0, 0, 4, 0, Math.PI * 2);
     ctx.fill();
@@ -6711,22 +7607,25 @@ expToNextLevel: Math.floor(10 + Math.pow(bs.level, 1.7) * 4 + bs.level * 4),
       ctx.fill();
     }
 
-    ctx.shadowBlur = 0;
-
     const trailLen = 16;
+    ctx.fillStyle = '#44CC44';
     for (let i = 1; i <= 3; i++) {
       const alpha = 0.5 - i * 0.12;
       const len = trailLen * i;
-      ctx.fillStyle = `rgba(68, 204, 68, ${alpha})`;
+      ctx.globalAlpha = alpha;
       ctx.fillRect(-len - bw / 2, -1 - i * 0.4, len, 2 + i * 0.5);
     }
+    ctx.globalAlpha = 1;
   }
 
   private renderIceShotBullet(ctx: CanvasRenderingContext2D, bw: number): void {
-    ctx.fillStyle = '#44AAFF';
-    ctx.shadowColor = '#44AAFF';
-    ctx.shadowBlur = 10;
+    // 性能优化：去除 shadowBlur，用外圈半透明圆模拟发光
+    ctx.fillStyle = 'rgba(68, 170, 255, 0.25)';
+    ctx.beginPath();
+    ctx.arc(0, 0, 9, 0, Math.PI * 2);
+    ctx.fill();
 
+    ctx.fillStyle = '#44AAFF';
     ctx.beginPath();
     ctx.moveTo(0, -4);
     ctx.lineTo(3, -2);
@@ -6759,15 +7658,15 @@ expToNextLevel: Math.floor(10 + Math.pow(bs.level, 1.7) * 4 + bs.level * 4),
       ctx.fill();
     }
 
-    ctx.shadowBlur = 0;
-
     const trailLen = 18;
+    ctx.fillStyle = '#44AAFF';
     for (let i = 1; i <= 3; i++) {
       const alpha = 0.55 - i * 0.14;
       const len = trailLen * i;
-      ctx.fillStyle = `rgba(68, 170, 255, ${alpha})`;
+      ctx.globalAlpha = alpha;
       ctx.fillRect(-len - bw / 2, -1 - i * 0.5, len, 2 + i);
     }
+    ctx.globalAlpha = 1;
   }
 
   // 波浪电击弹渲染：50px 正弦波，带流动动画和电光效果
@@ -6802,9 +7701,21 @@ expToNextLevel: Math.floor(10 + Math.pow(bs.level, 1.7) * 4 + bs.level * 4),
       headColor = '#FFFFFF';
     }
 
-    // 外层辉光
-    ctx.shadowColor = glowColor;
-    ctx.shadowBlur = 10;
+    // 外层辉光（性能优化：去除 shadowBlur，改用双层 stroke 模拟发光）
+    ctx.strokeStyle = glowColor;
+    ctx.globalAlpha = 0.35;
+    ctx.lineWidth = 5;
+    ctx.lineCap = 'round';
+    ctx.beginPath();
+    for (let i = 0; i <= segments; i++) {
+      const t = i / segments;
+      const x = -waveLen / 2 + t * waveLen;
+      const y = Math.sin(t * Math.PI * 3 + phase) * amp;
+      if (i === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+    ctx.globalAlpha = 1;
 
     // 主波浪线
     ctx.strokeStyle = mainColor;
@@ -6832,8 +7743,6 @@ expToNextLevel: Math.floor(10 + Math.pow(bs.level, 1.7) * 4 + bs.level * 4),
       else ctx.lineTo(x, y);
     }
     ctx.stroke();
-
-    ctx.shadowBlur = 0;
 
     // 弹头亮点
     ctx.fillStyle = headColor;
@@ -8828,7 +9737,7 @@ expToNextLevel: Math.floor(10 + Math.pow(bs.level, 1.7) * 4 + bs.level * 4),
 
     const ctx = this.ctx;
     const px = 2;
-    const laserLvl = this.skills.find(s => s.id === 'fx_laser_1')?.level || 1;
+    const laserLvl = this.getSkillLevel('fx_laser_1') || 1;
     const widthMult = 1 + (laserLvl - 1) * 0.2;
 
     const drawLaser = (muzzleX: number, muzzleY: number, isWhite: boolean) => {

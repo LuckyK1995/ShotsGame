@@ -2,6 +2,7 @@ import { useState, useRef } from 'react';
 import { GameCanvas, type GameCanvasHandle } from './components/GameCanvas';
 import { StatusBar } from './components/StatusBar';
 import { BossHealthBar } from './components/BossHealthBar';
+import { RareDropToast } from './components/RareDropToast';
 import { WaveNotice } from './components/WaveNotice';
 import { TabPanel } from './components/TabPanel';
 import { EquipmentPanel } from './components/EquipmentPanel';
@@ -62,6 +63,7 @@ function App() {
           <GameCanvas ref={gameCanvasRef} />
           <StatusBar onOpenShop={() => { setShopOpen(true); engineRef.current?.openShop(); }} engineRef={engineRef} />
           <BossHealthBar />
+          <RareDropToast />
           <WaveNotice />
           <AchievementNotification />
           <ShopPanel
