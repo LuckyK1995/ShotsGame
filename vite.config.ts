@@ -4,14 +4,14 @@ import tsconfigPaths from "vite-tsconfig-paths";
 import { traeBadgePlugin } from 'vite-plugin-trae-solo-badge';
 
 // https://vite.dev/config/
-export default defineConfig({
-  base: '/ShotsGame/',
+export default defineConfig(({ command }) => ({
+  base: command === 'build' ? '/ShotsGame/' : '/',
   server: {
     host: '0.0.0.0',
     port: 5173,
     strictPort: true, // 锁死 5173 端口，被占用时报错而不跳转其他端口
     open: true, // 启动时自动打开浏览器
-    allowedHosts: ['mygame.loca.lt', '.loca.lt'],
+    allowedHosts: true, // 允许所有 host（仅本地+局域网用，关闭隧道访问）
   },
   build: {
     sourcemap: 'hidden',
@@ -32,7 +32,7 @@ export default defineConfig({
       clickUrl: 'https://www.trae.ai/solo?showJoin=1',
       autoTheme: true,
       autoThemeTarget: '#root'
-    }), 
+    }),
     tsconfigPaths()
   ],
-})
+}))

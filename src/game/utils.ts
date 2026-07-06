@@ -55,9 +55,11 @@ export class ObjectPool<T extends { active: boolean }> {
     let obj = this.pool.find(o => !o.active);
     if (!obj) {
       if (this.pool.length >= this.maxSize) {
-        // 性能优化：池满时复用首个对象（最老的，大概率已飞出屏幕）
-        // 调用方应通过 getActive().length 上限检查避免命中此分支
-        obj = this.pool[0];
+        // 安全修复：池满时不再复用活跃对象（pool[0] 可能正在场上飞行）
+        // 改为扩容一次，避免破坏正在使用的对象状态
+        // maxSize 是软上限，对象会通过 release 自然回收，不会无限增长
+        obj = this.createFn();
+        this.pool.push(obj);
       } else {
         obj = this.createFn();
         this.pool.push(obj);

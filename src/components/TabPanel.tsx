@@ -8,16 +8,11 @@ interface TabPanelProps {
   tabs: Tab[];
   activeTab: string;
   onTabChange: (tabId: string) => void;
+  onClose?: () => void;
   children: React.ReactNode;
 }
 
-export function TabPanel({ tabs, activeTab, onTabChange, children }: TabPanelProps) {
-  const neonText = {
-    fontFamily: '"Rajdhani", "Orbitron", "Courier New", monospace',
-    fontWeight: 600,
-    letterSpacing: '0.5px',
-  } as React.CSSProperties;
-
+export function TabPanel({ tabs, activeTab, onTabChange, onClose, children }: TabPanelProps) {
   const neonCyan = '#00F5D4';
   const neonPurple = '#B026FF';
   const neonPink = '#FF0080';
@@ -33,8 +28,41 @@ export function TabPanel({ tabs, activeTab, onTabChange, children }: TabPanelPro
   };
 
   return (
-    <div className="h-full flex flex-col">
-      <div className="flex gap-1.5 px-1 pt-1 relative z-10">
+    <div className="h-full flex flex-col relative">
+      {/* 右上角关闭按钮 */}
+      {onClose && (
+        <button
+          onClick={onClose}
+          aria-label="关闭背包"
+          style={{
+            position: 'absolute',
+            top: '4px',
+            right: '6px',
+            zIndex: 30,
+            width: '26px',
+            height: '26px',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            background: 'rgba(19, 16, 37, 0.85)',
+            color: neonCyan,
+            fontSize: '20px',
+            lineHeight: 1,
+            cursor: 'pointer',
+            borderRadius: '6px',
+            border: `1px solid ${neonCyan}50`,
+            boxShadow: `0 0 8px ${neonCyan}30`,
+            textShadow: `0 0 6px ${neonCyan}80`,
+            fontFamily: '"Rajdhani", "Orbitron", monospace',
+            padding: 0,
+            paddingBottom: '2px',
+          }}
+        >
+          ﹀
+        </button>
+      )}
+
+      <div className="flex gap-1.5 pl-1 pr-9 pt-1 relative z-10">
         {tabs.map((tab) => {
           const isActive = activeTab === tab.id;
           const tc = tabColors[tab.id] || tabColors.equipment;

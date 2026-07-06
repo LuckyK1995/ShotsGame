@@ -182,6 +182,13 @@ export interface EquipmentAffix {
   element?: ElementType;
 }
 
+export interface SocketedGem {
+  gemId: string;     // gem_attack_common 等
+  type: 'attack' | 'health' | 'defense' | 'critRate' | 'resistance';
+  rarity: 'common' | 'advanced';
+  value: number;     // 1 或 2
+}
+
 export interface Equipment {
   id: string;
   name: string;
@@ -205,6 +212,8 @@ export interface Equipment {
   affixes?: EquipmentAffix[];
   element?: ElementType;
   elementalDamage?: number;
+  // 宝石镶嵌系统：已镶嵌的宝石列表（最多15颗）
+  socketedGems?: SocketedGem[];
 }
 
 export interface SetBonus {

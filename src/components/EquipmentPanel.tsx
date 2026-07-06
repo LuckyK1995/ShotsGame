@@ -1,8 +1,10 @@
 import React, { useState, useCallback, useMemo, useEffect } from 'react';
 import { useGameStore } from '../store/gameStore';
 import { EquipmentIcon } from './EquipmentIcon';
-import { Equipment, EquipSlot, EquipRarity } from '../game/types/game';
+import { GemEmbedModal } from './GemEmbedModal';
+import { Equipment, EquipSlot, EquipRarity, SocketedGem } from '../game/types/game';
 import { getEquipmentBonus, getRarityName, RARITY_COLORS, EQUIP_SLOTS, SLOT_LABELS, isEquipmentInActiveSet, getQualitySetGroups, RARITY_LABELS, createEquipment } from '../game/data/equipment';
+import { GEM_TYPE_INFO, GEM_RARITY_LABELS, GEM_RARITY_BG, GEM_RARITY_BORDER, getGemDef, MAX_GEM_SOCKETS, GEMS } from '../game/data/gems';
 
 // 出售价格表（按品质）
 const raritySellMap: Record<EquipRarity, number> = {
@@ -101,6 +103,11 @@ interface GameEngineRef {
   current: {
     addGold: (amount: number) => void;
     syncEquipmentState: (equipment: Equipment[], equipmentStorage: Equipment[]) => void;
+    socketGem: (equipmentId: string, gemId: string, source: 'equipped' | 'storage') => {
+      success: boolean;
+      reset: boolean;
+      reason?: string;
+    } | null;
   } | null;
 }
 
@@ -115,15 +122,20 @@ const EquipmentPanel: React.FC<EquipmentPanelProps> = ({ onTabChange, engineRef,
   // 用 selector 订阅，避免无关字段变化（玩家坐标/buff/天气）触发整面板重渲染
   const equipment = useGameStore(s => s.equipment);
   const equipmentStorage = useGameStore(s => s.equipmentStorage);
+  const gemInventory = useGameStore(s => s.gemInventory);
   const playerLevel = useGameStore(s => s.player?.level ?? 0);
   const setEquipment = useGameStore(s => s.setEquipment);
   const setEquipmentStorage = useGameStore(s => s.setEquipmentStorage);
+  const setGemInventory = useGameStore(s => s.setGemInventory);
   const player = { level: playerLevel } as const;
   // 仓库页签：装备 / 宝石 / 强化 / 附魔（仅装备页签有数据，其他预留扩展）
   const [storageTab, setStorageTab] = useState<'equipment' | 'gem' | 'enhance' | 'enchant'>('equipment');
   const [selectedItem, setSelectedItem] = useState<
     { equipment: Equipment; source: 'equipped' | 'storage' } | null
   >(null);
+  // 宝石详情弹窗：点击宝石仓库中的宝石格子时弹出
+  const [selectedGem, setSelectedGem] = useState<{ gemId: string; count: number } | null>(null);
+  const [showEmbedModal, setShowEmbedModal] = useState(false);
   const [sortDesc, setSortDesc] = useState(true); // true=由高到低，false=由低到高
   const [showSellPicker, setShowSellPicker] = useState(false);
   // 缓存勾选的品质（localStorage），避免重复操作
@@ -543,8 +555,99 @@ const EquipmentPanel: React.FC<EquipmentPanelProps> = ({ onTabChange, engineRef,
               </div>
             </div>
           </>
+        ) : storageTab === 'gem' ? (
+          /* 宝石页签：与物品栏一致的网格布局 + 点击弹窗 */
+          <div
+            className="flex-1 overflow-y-auto p-1.5"
+            style={{
+              background: 'rgba(13, 11, 26, 0.4)',
+              borderRadius: '8px',
+              border: '1px solid rgba(176, 38, 255, 0.1)',
+            }}
+          >
+            <div
+              className="grid gap-1"
+              style={{
+                gridTemplateColumns: 'repeat(5, 36px)',
+                rowGap: '1px',
+                justifyContent: 'space-between',
+              }}
+            >
+              {Object.values(GEMS).map(gem => {
+                const stack = gemInventory.find(s => s.itemId === gem.id);
+                const count = stack?.count ?? 0;
+                const info = GEM_TYPE_INFO[gem.type];
+                const isSelected = selectedGem?.gemId === gem.id;
+                return (
+                  <div
+                    key={gem.id}
+                    className={`flex flex-col items-center justify-center relative overflow-hidden cursor-pointer ${
+                      isSelected ? 'ring-2 ring-[#00F5D4]' : ''
+                    }`}
+                    style={{
+                      width: '36px',
+                      height: '36px',
+                      marginBottom: '1px',
+                      background: GEM_RARITY_BG[gem.rarity],
+                      border: `2.5px solid ${GEM_RARITY_BORDER[gem.rarity]}`,
+                      borderRadius: '8px',
+                      opacity: count > 0 ? 1 : 0.4,
+                    }}
+                    title={`${gem.name} ×${count}`}
+                    onClick={() => count > 0 && setSelectedGem({ gemId: gem.id, count })}
+                  >
+                    <span style={{ fontSize: '16px', filter: 'drop-shadow(0 0 3px rgba(255,255,255,0.3))' }}>
+                      {gem.icon}
+                    </span>
+                    {/* 左下角：宝石类型首字标识 */}
+                    <span
+                      className="absolute bottom-0.5 left-1"
+                      style={{
+                        fontFamily: '"Rajdhani", "Orbitron", monospace',
+                        fontSize: '8px',
+                        color: info.color,
+                        fontWeight: 700,
+                        textShadow: '0 0 3px rgba(0,0,0,0.8)',
+                      }}
+                    >
+                      {info.short}
+                    </span>
+                    {/* 右下角：数量 */}
+                    {count > 0 && (
+                      <span
+                        className="absolute bottom-0.5 right-0.5 text-[7px] px-1"
+                        style={{
+                          fontFamily: '"Rajdhani", "Orbitron", monospace',
+                          color: '#0D0B1A',
+                          backgroundColor: neonCyan,
+                          borderRadius: '3px',
+                          fontWeight: 700,
+                        }}
+                      >
+                        {count}
+                      </span>
+                    )}
+                  </div>
+                );
+              })}
+              {/* 空格子占位填充（与物品栏一致） */}
+              {Array(Math.max(0, 15 - Object.values(GEMS).length)).fill(null).map((_, index) => (
+                <div
+                  key={`gem-empty-${index}`}
+                  style={{
+                    width: '36px',
+                    height: '36px',
+                    background: 'rgba(19, 16, 37, 0.2)',
+                    border: '2.5px solid rgba(100, 100, 130, 0.15)',
+                    borderRadius: '8px',
+                    opacity: 0.6,
+                  }}
+                />
+              ))}
+            </div>
+          </div>
         ) : (
-          /* 宝石/强化/附魔页签：暂未实现，预留占位 */
+          /* 强化/附魔页签：暂未实现，预留占位 */
           <div
             className="flex-1 flex items-center justify-center"
             style={{
@@ -574,7 +677,7 @@ const EquipmentPanel: React.FC<EquipmentPanelProps> = ({ onTabChange, engineRef,
             style={{
               ...cardStyle,
               padding: '12px 14px',
-              height: '200px',
+              height: '230px',
             }}
             onClick={(e) => e.stopPropagation()}
           >
@@ -743,6 +846,31 @@ const EquipmentPanel: React.FC<EquipmentPanelProps> = ({ onTabChange, engineRef,
               </span>
             </div>
 
+            {/* 宝石镶嵌进度 + 加成 */}
+            {(() => {
+              const gems = selectedItem.equipment.socketedGems || [];
+              const cnt = gems.length;
+              const stats = { attack: 0, health: 0, defense: 0, critRate: 0, resistance: 0 };
+              for (const g of gems) stats[g.type] += g.value;
+              const hasGem = cnt > 0;
+              return (
+                <div className="flex justify-between mt-1" style={{ borderTop: '1px solid rgba(176, 38, 255, 0.15)', paddingTop: '4px' }}>
+                  <span style={{ ...neonText, fontSize: '7px', color: '#8B80A0' }}>
+                    宝石 <span style={{ color: cnt >= MAX_GEM_SOCKETS ? neonYellow : neonCyan, fontWeight: 700 }}>{cnt}/{MAX_GEM_SOCKETS}</span>
+                  </span>
+                  {hasGem && (
+                    <span style={{ ...neonText, fontSize: '7px', color: '#00FF9D' }}>
+                      {stats.attack > 0 && `攻+${stats.attack} `}
+                      {stats.health > 0 && `生+${stats.health} `}
+                      {stats.defense > 0 && `防+${stats.defense} `}
+                      {stats.critRate > 0 && `暴+${stats.critRate}% `}
+                      {stats.resistance > 0 && `抗+${stats.resistance}`}
+                    </span>
+                  )}
+                </div>
+              );
+            })()}
+
             {/* 操作按钮 */}
             <div className="mt-2 pt-2" style={{ borderTop: '1px solid rgba(176, 38, 255, 0.1)' }}>
               <div className="flex justify-between gap-1.5">
@@ -804,19 +932,19 @@ const EquipmentPanel: React.FC<EquipmentPanelProps> = ({ onTabChange, engineRef,
                 <button
                   className="px-3 py-1.5"
                   style={{
-                    background: 'rgba(255, 45, 85, 0.15)',
-                    border: '1px solid rgba(255, 45, 85, 0.3)',
+                    background: 'rgba(0, 255, 157, 0.15)',
+                    border: '1px solid rgba(0, 255, 157, 0.4)',
                     borderRadius: '6px',
                     fontFamily: '"Rajdhani", "Orbitron", monospace',
                     fontSize: '9px',
                     fontWeight: 700,
-                    color: '#FF2D55',
-                    boxShadow: '0 0 8px rgba(255, 45, 85, 0.1)',
+                    color: '#00FF9D',
+                    boxShadow: '0 0 8px rgba(0, 255, 157, 0.15)',
                     cursor: 'pointer',
                   }}
-                  onClick={handleDrop}
+                  onClick={() => setShowEmbedModal(true)}
                 >
-                  丢弃
+                  镶嵌
                 </button>
               </div>
               {selectedItem.source === 'storage' && player && player.level < selectedItem.equipment.level && (
@@ -945,6 +1073,168 @@ const EquipmentPanel: React.FC<EquipmentPanelProps> = ({ onTabChange, engineRef,
           </div>
         </div>
       )}
+
+      {/* 宝石镶嵌弹窗 */}
+      {showEmbedModal && selectedItem && (
+        <GemEmbedModal
+          equipmentId={selectedItem.equipment.id}
+          source={selectedItem.source}
+          onClose={() => setShowEmbedModal(false)}
+          engineRef={engineRef as GameEngineRef}
+        />
+      )}
+
+      {/* 宝石详情弹窗（与物品栏弹窗一致的结构） */}
+      {selectedGem && (() => {
+        const def = getGemDef(selectedGem.gemId);
+        if (!def) return null;
+        const info = GEM_TYPE_INFO[def.type];
+        return (
+          <div
+            className="absolute inset-0 flex items-center justify-center z-20"
+            style={{ background: 'rgba(0, 0, 0, 0.7)', backdropFilter: 'blur(4px)' }}
+            onClick={() => setSelectedGem(null)}
+          >
+            <div
+              className="relative w-64 p-4"
+              style={{
+                background: 'rgba(19, 16, 37, 0.8)',
+                backdropFilter: 'blur(12px)',
+                border: '1px solid rgba(176, 38, 255, 0.25)',
+                borderRadius: '12px',
+                boxShadow: '0 0 20px rgba(176, 38, 255, 0.1), inset 0 1px 0 rgba(255,255,255,0.05)',
+                padding: '16px 18px',
+              }}
+              onClick={(e) => e.stopPropagation()}
+            >
+              <button
+                className="absolute top-2.5 right-2.5 w-6 h-6 flex items-center justify-center"
+                style={{
+                  background: 'rgba(255, 45, 85, 0.2)',
+                  border: '1px solid rgba(255, 45, 85, 0.4)',
+                  borderRadius: '6px',
+                  fontFamily: '"Rajdhani", "Orbitron", monospace',
+                  fontSize: '11px',
+                  fontWeight: 'bold',
+                  color: '#FF2D55',
+                  cursor: 'pointer',
+                }}
+                onClick={() => setSelectedGem(null)}
+              >
+                X
+              </button>
+
+              {/* 图标 + 名称 + 品质/数量 */}
+              <div className="flex items-center gap-3 mb-3 pr-8">
+                <div
+                  className="w-12 h-12 flex items-center justify-center relative"
+                  style={{
+                    background: GEM_RARITY_BG[def.rarity],
+                    border: `2.5px solid ${GEM_RARITY_BORDER[def.rarity]}`,
+                    borderRadius: '8px',
+                  }}
+                >
+                  <span className="text-2xl" style={{ filter: 'drop-shadow(0 0 4px rgba(255,255,255,0.4))' }}>
+                    {def.icon}
+                  </span>
+                  {/* 左下角首字标识 */}
+                  <span
+                    className="absolute bottom-0.5 left-1"
+                    style={{
+                      fontFamily: '"Rajdhani", "Orbitron", monospace',
+                      fontSize: '9px',
+                      color: info.color,
+                      fontWeight: 700,
+                      textShadow: '0 0 3px rgba(0,0,0,0.8)',
+                    }}
+                  >
+                    {info.short}
+                  </span>
+                </div>
+                <div>
+                  <div
+                    style={{
+                      fontFamily: '"Rajdhani", "Orbitron", monospace',
+                      fontSize: '11px',
+                      fontWeight: 700,
+                      color: GEM_RARITY_BORDER[def.rarity],
+                      textShadow: `0 0 6px ${GEM_RARITY_BORDER[def.rarity]}60`,
+                    }}
+                  >
+                    {def.name}
+                  </div>
+                  <div
+                    className="mt-1"
+                    style={{ fontFamily: '"Rajdhani", "Orbitron", monospace', fontSize: '8px', color: '#8B80A0' }}
+                  >
+                    {GEM_RARITY_LABELS[def.rarity]} · 数量 {selectedGem.count}
+                  </div>
+                </div>
+              </div>
+
+              {/* 描述 */}
+              <div
+                className="pt-2 mb-3"
+                style={{ borderTop: '1px solid rgba(176, 38, 255, 0.15)' }}
+              >
+                <p
+                  style={{
+                    fontFamily: '"Rajdhani", "Orbitron", monospace',
+                    fontSize: '8px',
+                    color: '#B0A8C8',
+                    lineHeight: '1.5',
+                  }}
+                >
+                  {def.description}
+                </p>
+                <p
+                  className="mt-1"
+                  style={{
+                    fontFamily: '"Rajdhani", "Orbitron", monospace',
+                    fontSize: '7.5px',
+                    color: info.color,
+                    lineHeight: '1.5',
+                  }}
+                >
+                  类型：{info.name} · 可镶嵌至装备的宝石槽中
+                </p>
+              </div>
+
+              {/* 操作按钮：丢弃 */}
+              <div className="flex gap-2 justify-end flex-wrap">
+                <button
+                  className="px-4 py-1.5"
+                  style={{
+                    background: 'rgba(255, 45, 85, 0.15)',
+                    border: '1px solid rgba(255, 45, 85, 0.3)',
+                    borderRadius: '6px',
+                    fontFamily: '"Rajdhani", "Orbitron", monospace',
+                    fontSize: '9px',
+                    fontWeight: 700,
+                    color: '#FF2D55',
+                    boxShadow: '0 0 8px rgba(255, 45, 85, 0.1)',
+                    cursor: 'pointer',
+                  }}
+                  onClick={() => {
+                    // 丢弃：从宝石背包中扣除 1 颗
+                    const next = gemInventory
+                      .map(g => g.itemId === selectedGem.gemId ? { ...g, count: g.count - 1 } : g)
+                      .filter(g => g.count > 0);
+                    setGemInventory(next);
+                    if (engineRef?.current) {
+                      // 同步到引擎
+                      (engineRef.current as any).syncGemInventory?.(next);
+                    }
+                    setSelectedGem(null);
+                  }}
+                >
+                  丢弃
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
 };

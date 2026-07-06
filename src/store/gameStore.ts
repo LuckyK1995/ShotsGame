@@ -8,6 +8,8 @@ interface GameStore {
   skills: Skill[];
   equipment: Equipment[];
   equipmentStorage: Equipment[];
+  // 宝石背包：所有宝石以 ItemStack 形式堆叠存储（itemId = gem_xxx_yyy）
+  gemInventory: ItemStack[];
   buffs: Buff[];
   activeSkills: ActiveSkill[];
   talentChoices: Talent[];
@@ -20,13 +22,14 @@ interface GameStore {
   potionHotbar: (ItemStack | null)[];
   // 高品质掉落气泡通知（自动过期）
   rareDropNotifications: { id: number; rarity: string; name: string; icon: string; kind: 'equipment' | 'item' }[];
-  
+
   setGameState: (state: GameState, player: Player) => void;
   setPlayer: (player: Player) => void;
   setInventory: (inventory: ItemStack[]) => void;
   setSkills: (skills: Skill[]) => void;
   setEquipment: (equipment: Equipment[]) => void;
   setEquipmentStorage: (storage: Equipment[]) => void;
+  setGemInventory: (gems: ItemStack[]) => void;
   setBuffs: (buffs: Buff[]) => void;
   setActiveSkills: (skills: ActiveSkill[]) => void;
   setTalentChoices: (choices: Talent[]) => void;
@@ -47,6 +50,7 @@ export const useGameStore = create<GameStore>((set) => ({
   skills: [],
   equipment: [],
   equipmentStorage: [],
+  gemInventory: [],
   buffs: [],
   activeSkills: [],
   talentChoices: [],
@@ -55,7 +59,7 @@ export const useGameStore = create<GameStore>((set) => ({
   codexEntries: [],
   achievements: [],
   unlockedAchievement: null,
-  potionHotbar: [null, null, null, null],
+  potionHotbar: [null, null, null, null, null, null, null, null],
   rareDropNotifications: [],
   
   setGameState: (gameState, player) => set({ gameState, player }),
@@ -64,6 +68,7 @@ export const useGameStore = create<GameStore>((set) => ({
   setSkills: (skills) => set({ skills }),
   setEquipment: (equipment) => set({ equipment }),
   setEquipmentStorage: (storage) => set({ equipmentStorage: storage }),
+  setGemInventory: (gemInventory) => set({ gemInventory }),
   setBuffs: (buffs) => set({ buffs }),
   setActiveSkills: (activeSkills) => set({ activeSkills }),
   setTalentChoices: (talentChoices) => set({ talentChoices }),

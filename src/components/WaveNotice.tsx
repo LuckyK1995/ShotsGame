@@ -20,7 +20,7 @@ export function WaveNotice() {
 
     return (
       <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-30">
-        <div className="text-center">
+        <div className="w-full text-center">
           <h2
             className="text-5xl font-bold"
             style={{
@@ -50,7 +50,7 @@ export function WaveNotice() {
 
   return (
     <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-30">
-      <div className="text-center">
+      <div className="w-full text-center">
         <h2
           className="text-5xl font-bold text-[#FFD700]"
           style={{

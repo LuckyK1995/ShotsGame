@@ -45,14 +45,14 @@ const raritySellMap: Record<string, number> = {
   mythic: 500,
 };
 
-function hexToRgba(hex: string, alpha: number): string {
+export function hexToRgba(hex: string, alpha: number): string {
   const r = parseInt(hex.slice(1, 3), 16);
   const g = parseInt(hex.slice(3, 5), 16);
   const b = parseInt(hex.slice(5, 7), 16);
   return `rgba(${r}, ${g}, ${b}, ${alpha})`;
 }
 
-const itemSlotStyle = (rarity?: string) => {
+export const itemSlotStyle = (rarity?: string) => {
   const r = (rarity || 'common') as ItemRarity;
   const baseColor = RARITY_COLORS[r] || RARITY_COLORS.common;
   const borderAlpha: Record<string, number> = {
@@ -85,9 +85,9 @@ const itemSlotStyle = (rarity?: string) => {
   };
 };
 
-const emptySlotStyle = {
+export const emptySlotStyle = {
   background: 'rgba(19, 16, 37, 0.2)',
-  border: '2.5px dashed rgba(100, 100, 130, 0.15)',
+  border: '2.5px solid rgba(100, 100, 130, 0.15)',
   borderRadius: '8px',
   opacity: 0.6,
 };
@@ -342,16 +342,11 @@ export function InventoryPanel({ engineRef }: InventoryPanelProps) {
                   onClick={(e) => {
                     if (stack) {
                       e.stopPropagation();
-                      handleHotbarClick(idx);
-                    }
-                  }}
-                  onDoubleClick={(e) => {
-                    if (stack) {
-                      e.stopPropagation();
+                      // 单击直接使用（移除原双击逻辑，避免误操作）
                       handleHotbarUse(idx);
                     }
                   }}
-                  title={stack ? `${itemDef?.name} (双击使用)` : '空快捷栏'}
+                  title={stack ? `${itemDef?.name} (点击使用)` : '空快捷栏'}
                 >
                   {itemDef && (
                     <>

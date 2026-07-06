@@ -25,6 +25,7 @@ import type {
   CodexEntry,
   Achievement,
   ItemDef,
+  SocketedGem,
 } from './types/game';
 import {
   ObjectPool,
@@ -42,6 +43,7 @@ import {
 } from './utils';
 import { ENEMY_CONFIGS, NORMAL_ENEMY_TYPES, ELITE_ENEMY_TYPES, BOSS_ENEMY_TYPES } from './data/enemies';
 import { WEAPONS, ARMORS, ITEMS, SKILLS, INITIAL_EQUIPMENT, createEquipment, getQualitySetGroups, getItemDef, SLOT_LABELS, RARITY_LABELS } from './data/equipment';
+import { getGemDef, MAX_GEM_SOCKETS, getSocketSuccessRate, isFailResetToZero, randomGemId } from './data/gems';
 
 export class GameEngine {
   canvas: HTMLCanvasElement;
@@ -60,6 +62,8 @@ export class GameEngine {
   equipment: Equipment[];
   equipmentStorage: Equipment[];
   inventory: ItemStack[];
+  // 宝石背包：与 inventory 平行存储
+  gemInventory: ItemStack[];
   skills: Skill[];
 
   private animationId: number | null = null;
@@ -71,6 +75,7 @@ export class GameEngine {
   onBossSpawn?: (name: string, health: number, maxHealth: number) => void;
   onBossDefeat?: () => void;
   onInventoryChange?: (inventory: ItemStack[]) => void;
+  onGemInventoryChange?: (gems: ItemStack[]) => void;
   onSkillsChange?: (skills: Skill[]) => void;
   onEquipmentChange?: (equipment: Equipment[]) => void;
   onEquipmentStorageChange?: (storage: Equipment[]) => void;
@@ -241,12 +246,15 @@ export class GameEngine {
     this.canvas = canvas;
     this.ctx = canvas.getContext('2d')!;
 
+    // 战场固定300px高度，不按比例，保证每个设备一致
+    const ARENA_HEIGHT = 300;
+    const groundY = canvas.height - ARENA_HEIGHT;
     this.config = {
       canvasWidth: canvas.width,
       canvasHeight: canvas.height,
       playerStartX: 14,
-      playerStartY: canvas.height * 0.65 - 25 + ((canvas.height - (canvas.height * 0.65 - 25)) * 0.5) - 16,
-      groundY: canvas.height * 0.65 - 20,
+      playerStartY: groundY + (ARENA_HEIGHT * 0.5) - 16,
+      groundY,
       baseEnemyCount: 11,
       maxEnemyCount: 30,
       eliteWaveInterval: 5,
@@ -314,6 +322,19 @@ export class GameEngine {
       { itemId: 'speed_boost', count: 3 },
       { itemId: 'bomb', count: 2 },
       { itemId: 'magnet', count: 2 },
+    ];
+    // 初始宝石背包：每种宝石各 99 颗，便于测试
+    this.gemInventory = [
+      { itemId: 'gem_attack_common', count: 99 },
+      { itemId: 'gem_attack_advanced', count: 99 },
+      { itemId: 'gem_health_common', count: 99 },
+      { itemId: 'gem_health_advanced', count: 99 },
+      { itemId: 'gem_defense_common', count: 99 },
+      { itemId: 'gem_defense_advanced', count: 99 },
+      { itemId: 'gem_critRate_common', count: 99 },
+      { itemId: 'gem_critRate_advanced', count: 99 },
+      { itemId: 'gem_resistance_common', count: 99 },
+      { itemId: 'gem_resistance_advanced', count: 99 },
     ];
     this.skills = SKILLS.map(s => ({ ...s, currentCooldown: 0 }));
     this.activeSkills = this.initActiveSkills();
@@ -935,6 +956,18 @@ expToNextLevel: Math.floor(10 + Math.pow(bs.level, 1.7) * 4 + bs.level * 4),
       if (equip.elementalDamage && equip.element && activeElements.has(equip.element)) {
         elementalDamageBonus[equip.element] = (elementalDamageBonus[equip.element] || 0) + equip.elementalDamage;
       }
+      // 宝石镶嵌加成：与装备主属性同时累加
+      if (equip.socketedGems && equip.socketedGems.length > 0) {
+        for (const g of equip.socketedGems) {
+          switch (g.type) {
+            case 'attack':     attack += g.value; break;
+            case 'health':     maxHealth += g.value; break;
+            case 'defense':    defense += g.value; break;
+            case 'critRate':   critRate += g.value; break;
+            case 'resistance': resistance += g.value; break;
+          }
+        }
+      }
       // 词条加成
       if (equip.affixes) {
         for (const affix of equip.affixes) {
@@ -1302,21 +1335,40 @@ expToNextLevel: Math.floor(10 + Math.pow(bs.level, 1.7) * 4 + bs.level * 4),
     }
   }
 
+  // 统一触发游戏结束：设置标志位 + 立即同步状态给 React（避免节流导致 UI 收不到通知）
+  private triggerGameOver(): void {
+    if (this.gameState.isGameOver) return; // 已结束则不重复触发
+    this.gameState.isGameOver = true;
+    this.player.health = 0; // 确保 blood 不为负
+    if (this.onStateChange) {
+      this.onStateChange(this.gameState, this.player);
+    }
+    if (this.onPlayerChange) {
+      this.onPlayerChange(this.player);
+    }
+  }
+
   private gameLoop = (): void => {
     if (!this.gameState.isRunning) return;
 
-    const currentTime = performance.now();
-    const deltaTime = Math.min((currentTime - this.lastTime) / 1000, 0.1);
-    this.lastTime = currentTime;
+    try {
+      const currentTime = performance.now();
+      const deltaTime = Math.min((currentTime - this.lastTime) / 1000, 0.1);
+      this.lastTime = currentTime;
 
-    if (!this.gameState.isPaused && !this.gameState.isGameOver) {
-      this.update(deltaTime);
+      if (!this.gameState.isPaused && !this.gameState.isGameOver) {
+        this.update(deltaTime);
+      }
+
+      this.animFrame++;
+      if (this.muzzleFlashTimer > 0) this.muzzleFlashTimer--;
+
+      this.render();
+    } catch (err) {
+      // 异常捕获：确保 rAF 链不中断，避免游戏永久冻结
+      console.error('[GameEngine] gameLoop error:', err);
     }
 
-    this.animFrame++;
-    if (this.muzzleFlashTimer > 0) this.muzzleFlashTimer--;
-
-    this.render();
     this.animationId = requestAnimationFrame(this.gameLoop);
   };
 
@@ -1346,6 +1398,12 @@ expToNextLevel: Math.floor(10 + Math.pow(bs.level, 1.7) * 4 + bs.level * 4),
 
     // 更新剩余怪物数
     this.gameState.waveEnemiesRemaining = this.getWaveRemainingCount();
+
+    // 统一监听血量：任何伤害导致 hp<=0 时，clamp 到 0 并触发游戏结束（弹出继续挑战界面）
+    if (this.player.health <= 0 && !this.gameState.isGameOver) {
+      this.player.health = 0;
+      this.triggerGameOver();
+    }
 
     // 节流 React 状态同步：100ms 一次（每秒 10 次，足够 UI 显示）
     this.stateSyncTimer += dt;
@@ -1385,11 +1443,10 @@ expToNextLevel: Math.floor(10 + Math.pow(bs.level, 1.7) * 4 + bs.level * 4),
       if ((d.type === 'burn' || d.type === 'poison') && d.tickTimer <= 0 && !playerInvincible) {
         d.tickTimer = 500;
         const dotDamage = this.player.maxHealth * d.value * 0.005; // value=百分比，每tick扣value*0.5%最大生命
-        this.player.health -= dotDamage;
-        if (this.player.health <= 0) {
-          this.player.health = 0;
-          this.gameState.isGameOver = true;
-        }
+        // 实际扣血量 clamp 到当前剩余血量，避免伤害数字显示超过剩余血量
+        const actualDamage = Math.min(dotDamage, this.player.health);
+        this.player.health -= actualDamage;
+        // 血量监听统一在 update() 中处理，无需此处重复判断
         // DoT粒子
         const color = d.type === 'burn' ? '#FF5540' : '#00CC00';
         this.particlePool.acquire(
@@ -1621,50 +1678,40 @@ expToNextLevel: Math.floor(10 + Math.pow(bs.level, 1.7) * 4 + bs.level * 4),
     const intensity = this.weather.intensity;
     
     switch (this.weather.type) {
-      case 'rain':
-        this.player.health -= 1.5 * intensity * dt;
-        if (this.player.health <= 0) {
-          this.player.health = 0;
-          this.gameState.isGameOver = true;
-        }
+      case 'rain': {
+        const dmg = Math.min(1.5 * intensity * dt, this.player.health);
+        this.player.health -= dmg;
         break;
-      case 'acid_rain':
-        this.player.health -= 2 * intensity * dt;
-        if (this.player.health <= 0) {
-          this.player.health = 0;
-          this.gameState.isGameOver = true;
-        }
+      }
+      case 'acid_rain': {
+        const dmg = Math.min(2 * intensity * dt, this.player.health);
+        this.player.health -= dmg;
         break;
+      }
       case 'sandstorm':
         break;
       case 'thunderstorm':
         if (Math.random() < 0.002 * intensity * dt * 60) {
-          this.player.health -= 8 * intensity;
-          if (this.player.health <= 0) {
-            this.player.health = 0;
-            this.gameState.isGameOver = true;
-          }
+          const dmg = Math.min(8 * intensity, this.player.health);
+          this.player.health -= dmg;
         }
         break;
       case 'snow':
         break;
-      case 'radiation':
-        this.player.health -= 1 * intensity * dt;
-        if (this.player.health <= 0) {
-          this.player.health = 0;
-          this.gameState.isGameOver = true;
-        }
+      case 'radiation': {
+        const dmg = Math.min(1 * intensity * dt, this.player.health);
+        this.player.health -= dmg;
         break;
-      case 'heat_wave':
-        this.player.health -= 1 * intensity * dt;
-        if (this.player.health <= 0) {
-          this.player.health = 0;
-          this.gameState.isGameOver = true;
-        }
+      }
+      case 'heat_wave': {
+        const dmg = Math.min(1 * intensity * dt, this.player.health);
+        this.player.health -= dmg;
         break;
+      }
       case 'fog':
         break;
     }
+    // 血量监听统一在 update() 中处理，无需此处重复判断
   }
 
   private updateActiveSkills(dt: number): void {
@@ -1776,13 +1823,13 @@ expToNextLevel: Math.floor(10 + Math.pow(bs.level, 1.7) * 4 + bs.level * 4),
     if (count >= 1) {
       positions.push({
         x: centerX + 20,
-        y: centerY - 80,
+        y: centerY - 95,
       });
     }
     if (count >= 2) {
       positions.push({
         x: centerX + 20,
-        y: centerY + 50,
+        y: centerY + 85,
       });
     }
     return positions;
@@ -2739,11 +2786,9 @@ expToNextLevel: Math.floor(10 + Math.pow(bs.level, 1.7) * 4 + bs.level * 4),
           if (dist <= 14 && !playerInvincible) {
             const defense = (this.player as any).defense || 0;
             const reducedDamage = Math.max(1, bullet.damage * (1 - defense / 100));
-            this.player.health -= reducedDamage;
-            if (this.player.health <= 0) {
-              this.player.health = 0;
-              this.gameState.isGameOver = true;
-            }
+            const actualDamage = Math.min(reducedDamage, this.player.health);
+            this.player.health -= actualDamage;
+            // 血量监听统一在 update() 中处理，无需此处重复判断
           }
           // 落地粒子特效
           if (this.particlePool.canAcquire()) {
@@ -2953,11 +2998,9 @@ expToNextLevel: Math.floor(10 + Math.pow(bs.level, 1.7) * 4 + bs.level * 4),
         if (!playerInvincible) {
           const defense = (this.player as any).defense || 0;
           const reducedDamage = Math.max(1, enemy.damage * (1 - defense / 100));
-          this.player.health -= reducedDamage * dt;
-          if (this.player.health <= 0) {
-            this.player.health = 0;
-            this.gameState.isGameOver = true;
-          }
+          const actualDamage = Math.min(reducedDamage * dt, this.player.health);
+          this.player.health -= actualDamage;
+          // 血量监听统一在 update() 中处理，无需此处重复判断
           // 需求 #8：精英/BOSS接触玩家时施加debuff
           this.applyEliteBossDebuff(enemy);
         }
@@ -3023,6 +3066,8 @@ expToNextLevel: Math.floor(10 + Math.pow(bs.level, 1.7) * 4 + bs.level * 4),
 
   // 远程射手抛物线子弹
   private fireRangedShooterProjectile(enemy: Enemy): void {
+    // 性能保护：子弹池上限检查，避免无限扩容
+    if (this.bulletPool.getActive().length >= 120) return;
     const startX = enemy.x + enemy.width / 2;
     const startY = enemy.y + enemy.height / 2;
     const targetX = this.player.x + this.player.width / 2;
@@ -3068,14 +3113,12 @@ expToNextLevel: Math.floor(10 + Math.pow(bs.level, 1.7) * 4 + bs.level * 4),
     if (dist <= 50 && !playerInvincible) {
       const defense = (this.player as any).defense || 0;
       const reducedDamage = Math.max(1, explosionDamage * (1 - defense / 100));
-      this.player.health -= reducedDamage;
-      // 显示爆炸伤害数字
-      const dn = this.damageNumberPool.acquire(cx, cy - 10, Math.floor(reducedDamage), '#FF0066');
+      const actualDamage = Math.min(reducedDamage, this.player.health);
+      this.player.health -= actualDamage;
+      // 显示爆炸伤害数字（实际扣血量，避免超过剩余血量）
+      const dn = this.damageNumberPool.acquire(cx, cy - 10, Math.floor(actualDamage), '#FF0066');
       if (dn) (dn as any).isCrit = true;
-      if (this.player.health <= 0) {
-        this.player.health = 0;
-        this.gameState.isGameOver = true;
-      }
+      // 血量监听统一在 update() 中处理，无需此处重复判断
     }
 
     // === 爆炸特效 ===
@@ -3994,8 +4037,17 @@ expToNextLevel: Math.floor(10 + Math.pow(bs.level, 1.7) * 4 + bs.level * 4),
     this.enemyPool.release(enemy);
 
     // 普通BOSS死亡后，若怪物沙袋仍存活则恢复其BOSS血条
+    // 安全修复：用 getAll() 遍历避免触发 _activeCache 重建（updateEnemies 可能正在迭代 _activeCache）
     if (enemy.isBoss) {
-      const sandbag = this.enemyPool.getActive().find(e => (e as any).isMonsterSandbag);
+      const allEnemies = this.enemyPool.getAll();
+      let sandbag: Enemy | undefined;
+      for (let i = 0; i < allEnemies.length; i++) {
+        const e = allEnemies[i];
+        if (e.active && (e as any).isMonsterSandbag) {
+          sandbag = e;
+          break;
+        }
+      }
       if (sandbag) {
         this.gameState.bossActive = true;
         this.gameState.bossHealth = sandbag.health;
@@ -4458,6 +4510,91 @@ expToNextLevel: Math.floor(10 + Math.pow(bs.level, 1.7) * 4 + bs.level * 4),
     if (this.onPlayerChange) this.onPlayerChange(this.player);
   }
 
+  // 同步宝石背包到引擎
+  syncGemInventory(gems: ItemStack[]): void {
+    this.gemInventory = gems;
+    if (this.onGemInventoryChange) this.onGemInventoryChange(this.gemInventory);
+  }
+
+  // 宝石镶嵌：根据已镶嵌数量计算成功率与失败后果
+  // 第1颗 100% 成功；第2-7颗 50% 成功，失败不归零；第8-15颗 50% 成功，失败全部碎裂
+  socketGem(equipmentId: string, gemId: string, source: 'equipped' | 'storage'): {
+    success: boolean;
+    reset: boolean;
+    reason?: string;
+  } | null {
+    const list = source === 'equipped' ? this.equipment : this.equipmentStorage;
+    const idx = list.findIndex(e => e.id === equipmentId);
+    if (idx === -1) return { success: false, reset: false, reason: '装备不存在' };
+
+    const equip = list[idx];
+    const currentGems = equip.socketedGems || [];
+    if (currentGems.length >= MAX_GEM_SOCKETS) {
+      return { success: false, reset: false, reason: '已满 15 颗' };
+    }
+
+    // 检查宝石背包是否有此宝石
+    const gemStack = this.gemInventory.find(g => g.itemId === gemId);
+    if (!gemStack || gemStack.count <= 0) {
+      return { success: false, reset: false, reason: '宝石不足' };
+    }
+
+    const def = getGemDef(gemId);
+    if (!def) return { success: false, reset: false, reason: '宝石定义不存在' };
+
+    // 同类宝石锁定：若已镶嵌宝石，则仅允许同类宝石
+    if (currentGems.length > 0 && currentGems[0].type !== def.type) {
+      return { success: false, reset: false, reason: '只能镶嵌同类宝石' };
+    }
+
+    // 扣除 1 颗宝石（无论成功失败都消耗）
+    this.gemInventory = this.gemInventory
+      .map(g => g.itemId === gemId ? { ...g, count: g.count - 1 } : g)
+      .filter(g => g.count > 0);
+    if (this.onGemInventoryChange) this.onGemInventoryChange(this.gemInventory);
+
+    // 计算成功率与失败后果
+    const rate = getSocketSuccessRate(currentGems.length);
+    const isSuccess = Math.random() < rate;
+
+    if (isSuccess) {
+      // 成功：追加到 socketedGems
+      const newGem: SocketedGem = {
+        gemId: def.id,
+        type: def.type,
+        rarity: def.rarity,
+        value: def.value,
+      };
+      const updatedEquip: Equipment = {
+        ...equip,
+        socketedGems: [...currentGems, newGem],
+      };
+      list[idx] = updatedEquip;
+      this.finishSocketUpdate(source);
+      return { success: true, reset: false };
+    } else {
+      // 失败：根据当前数量决定是否归零
+      const willReset = isFailResetToZero(currentGems.length);
+      const updatedEquip: Equipment = willReset
+        ? { ...equip, socketedGems: [] }
+        : equip;  // 失败不归零，仅消耗宝石
+      list[idx] = updatedEquip;
+      this.finishSocketUpdate(source);
+      return { success: false, reset: willReset };
+    }
+  }
+
+  // 镶嵌完成后的统一同步逻辑
+  private finishSocketUpdate(source: 'equipped' | 'storage'): void {
+    this.calculatePlayerStats();
+    if (source === 'equipped') {
+      if (this.onEquipmentChange) this.onEquipmentChange(this.equipment);
+    } else {
+      if (this.onEquipmentStorageChange) this.onEquipmentStorageChange(this.equipmentStorage);
+    }
+    if (this.onPlayerChange) this.onPlayerChange(this.player);
+  }
+
   spawnSandbags(): void {
     this.destroySandbags();
     const { canvasWidth, canvasHeight, playerStartX } = this.config;
@@ -4698,6 +4835,7 @@ expToNextLevel: Math.floor(10 + Math.pow(bs.level, 1.7) * 4 + bs.level * 4),
       equipment: this.equipment,
       equipmentStorage: this.equipmentStorage,
       inventory: this.inventory,
+      gemInventory: this.gemInventory,
       skills: this.skills.map(s => ({ id: s.id, level: s.level })),
       talents: this.talents,
       highestWave: this.highestWave,
@@ -4740,6 +4878,9 @@ expToNextLevel: Math.floor(10 + Math.pow(bs.level, 1.7) * 4 + bs.level * 4),
       }
       if (saveData.inventory) {
         this.inventory = saveData.inventory;
+      }
+      if (saveData.gemInventory) {
+        this.gemInventory = saveData.gemInventory;
       }
       if (saveData.skills) {
         for (const savedSkill of saveData.skills) {
@@ -5443,7 +5584,9 @@ expToNextLevel: Math.floor(10 + Math.pow(bs.level, 1.7) * 4 + bs.level * 4),
     this.canvas.height = height;
     this.config.canvasWidth = width;
     this.config.canvasHeight = height;
-    this.config.groundY = height * 0.65 - 20;
+    // 战场固定300px高度，不按比例，保证每个设备一致
+    const ARENA_HEIGHT = 300;
+    this.config.groundY = height - ARENA_HEIGHT;
     const arenaTop = this.config.groundY;
     const arenaBottom = height;
     const arenaCenter = arenaTop + (arenaBottom - arenaTop) * 0.5;
