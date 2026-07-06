@@ -138,8 +138,7 @@ export function GemEmbedModal({ equipmentId, source, onClose, engineRef }: GemEm
             : '镶嵌失败！宝石已消耗',
         });
       }
-      setSelectedGemId(null);
-      setIsProcessing(false);
+      setTimeout(() => setIsProcessing(false), 200);
     }, 300);
   };
 
