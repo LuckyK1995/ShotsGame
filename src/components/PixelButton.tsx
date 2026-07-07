@@ -9,6 +9,74 @@ const neonTextStyle: React.CSSProperties = {
   letterSpacing: '0.5px',
 };
 
+// 性能优化：将按钮样式对象提到模块顶层，避免每次 render 重新创建
+const btnBaseStyle: React.CSSProperties = {
+  display: 'flex',
+  flexDirection: 'column',
+  alignItems: 'center',
+  gap: '1px',
+  padding: '2px 0',
+  background: 'transparent',
+  border: 'none',
+  cursor: 'pointer',
+  flexShrink: 0,
+};
+
+const circleBaseStyle: React.CSSProperties = {
+  width: '30px',
+  height: '30px',
+  borderRadius: '50%',
+  position: 'relative',
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  transition: 'transform 0.15s ease',
+};
+
+const iconWrapStyle: React.CSSProperties = {
+  width: '22px',
+  height: '22px',
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+};
+
+// active / inactive 圆形样式（预计算，避免每次 render 拼接字符串）
+const circleActiveStyle: React.CSSProperties = {
+  ...circleBaseStyle,
+  background: 'radial-gradient(circle at 35% 30%, rgba(255,255,255,0.4) 0%, rgba(0, 245, 212, 0.5) 35%, rgba(0, 200, 180, 0.4) 70%, rgba(0, 150, 130, 0.3) 100%)',
+  boxShadow: 'inset 2px 2px 4px rgba(255,255,255,0.3), inset -2px -2px 4px rgba(0,0,0,0.4), 0 0 10px rgba(0, 245, 212, 0.6), 0 0 18px rgba(0, 245, 212, 0.3)',
+  border: '1.5px solid rgba(0, 245, 212, 0.8)',
+};
+
+const circleInactiveStyle: React.CSSProperties = {
+  ...circleBaseStyle,
+  background: 'radial-gradient(circle at 35% 30%, rgba(255,255,255,0.25) 0%, rgba(60, 50, 90, 0.6) 40%, rgba(30, 25, 55, 0.8) 75%, rgba(15, 12, 30, 0.9) 100%)',
+  boxShadow: 'inset 2px 2px 4px rgba(255,255,255,0.15), inset -2px -2px 4px rgba(0,0,0,0.5), 0 2px 4px rgba(0,0,0,0.4), 0 0 6px rgba(176, 38, 255, 0.2)',
+  border: '1.5px solid rgba(100, 80, 140, 0.7)',
+};
+
+const iconActiveStyle: React.CSSProperties = { ...iconWrapStyle, filter: 'brightness(1.2)' };
+const iconInactiveStyle: React.CSSProperties = { ...iconWrapStyle, filter: 'brightness(0.9)' };
+
+const labelActiveStyle: React.CSSProperties = {
+  ...neonTextStyle,
+  fontSize: '8px',
+  color: '#00F5D4',
+  textShadow: '0 0 4px rgba(0, 245, 212, 0.9), 1px 1px 0 rgba(0,0,0,0.8)',
+  lineHeight: 1,
+  whiteSpace: 'nowrap',
+};
+
+const labelInactiveStyle: React.CSSProperties = {
+  ...neonTextStyle,
+  fontSize: '8px',
+  color: '#FFD700',
+  textShadow: '1px 1px 0 rgba(0,0,0,0.85), 0 0 2px rgba(255, 215, 0, 0.3)',
+  lineHeight: 1,
+  whiteSpace: 'nowrap',
+};
+
 interface PixelButtonProps {
   iconElement: React.ReactNode;
   label: string;
@@ -21,17 +89,7 @@ function PixelButtonImpl({ iconElement, label, active = false, onClick, badge }:
   return (
     <button
       onClick={onClick}
-      style={{
-        display: 'flex',
-        flexDirection: 'column',
-        alignItems: 'center',
-        gap: '1px',
-        padding: '2px 0',
-        background: 'transparent',
-        border: 'none',
-        cursor: 'pointer',
-        flexShrink: 0,
-      }}
+      style={btnBaseStyle}
       onMouseEnter={(e) => {
         const circle = e.currentTarget.querySelector('[data-circle]') as HTMLElement | null;
         if (circle && !active) {
@@ -48,45 +106,10 @@ function PixelButtonImpl({ iconElement, label, active = false, onClick, badge }:
       {/* 圆形立体图标 */}
       <div
         data-circle
-        style={{
-          width: '30px',
-          height: '30px',
-          borderRadius: '50%',
-          position: 'relative',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          transition: 'transform 0.15s ease',
-          background: active
-            ? 'radial-gradient(circle at 35% 30%, rgba(255,255,255,0.4) 0%, rgba(0, 245, 212, 0.5) 35%, rgba(0, 200, 180, 0.4) 70%, rgba(0, 150, 130, 0.3) 100%)'
-            : 'radial-gradient(circle at 35% 30%, rgba(255,255,255,0.25) 0%, rgba(60, 50, 90, 0.6) 40%, rgba(30, 25, 55, 0.8) 75%, rgba(15, 12, 30, 0.9) 100%)',
-          boxShadow: active
-            ? `
-              inset 2px 2px 4px rgba(255,255,255,0.3),
-              inset -2px -2px 4px rgba(0,0,0,0.4),
-              0 0 10px rgba(0, 245, 212, 0.6),
-              0 0 18px rgba(0, 245, 212, 0.3)
-            `
-            : `
-              inset 2px 2px 4px rgba(255,255,255,0.15),
-              inset -2px -2px 4px rgba(0,0,0,0.5),
-              0 2px 4px rgba(0,0,0,0.4),
-              0 0 6px rgba(176, 38, 255, 0.2)
-            `,
-          border: active
-            ? '1.5px solid rgba(0, 245, 212, 0.8)'
-            : '1.5px solid rgba(100, 80, 140, 0.7)',
-        }}
+        style={active ? circleActiveStyle : circleInactiveStyle}
       >
         {/* 图标 */}
-        <div style={{
-          width: '22px',
-          height: '22px',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          filter: active ? 'brightness(1.2)' : 'brightness(0.9)',
-        }}>
+        <div style={active ? iconActiveStyle : iconInactiveStyle}>
           {iconElement}
         </div>
 
@@ -120,25 +143,14 @@ function PixelButtonImpl({ iconElement, label, active = false, onClick, badge }:
       </div>
 
       {/* 文字标签 - 像素风金色带1px黑色描边 */}
-      <span
-        style={{
-          ...neonTextStyle,
-          fontSize: '8px',
-          color: active ? '#00F5D4' : '#FFD700',
-          textShadow: active
-            ? '0 0 4px rgba(0, 245, 212, 0.9), 1px 1px 0 rgba(0,0,0,0.8)'
-            : '1px 1px 0 rgba(0,0,0,0.85), 0 0 2px rgba(255, 215, 0, 0.3)',
-          lineHeight: 1,
-          whiteSpace: 'nowrap',
-        }}
-      >
+      <span style={active ? labelActiveStyle : labelInactiveStyle}>
         {label}
       </span>
     </button>
   );
 }
 
-// 性能优化：memo 包装
+// 性能优化：memo 包装，配合 App.tsx 中稳定 props 仅 active 变化时重渲染
 export const PixelButton = memo(PixelButtonImpl);
 
 // ===== 8个像素风底部按钮图标 =====

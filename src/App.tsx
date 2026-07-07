@@ -44,6 +44,22 @@ type View = 'menu' | 'battle';
 type ActivePanel = 'character' | 'bag' | 'skill' | 'codex' | 'mail' | null;
 type BagTab = 'equipment' | 'inventory' | 'debug';
 
+// 按钮 ID → 对应的 ActivePanel（模块级常量，避免每次 render 重建）
+const BUTTON_PANEL_MAP: Record<string, ActivePanel> = {
+  character: 'character',
+  skill: 'skill',
+  achievement: 'codex',
+  mail: 'mail',
+  bag: 'bag',
+};
+
+// 背包页签：模块级常量
+const BAG_TABS = [
+  { id: 'equipment', label: '装备', icon: '\u2694' },
+  { id: 'inventory', label: '物品', icon: '\uD83C\uDF92' },
+  { id: 'debug', label: '调试', icon: '\u2699' },
+];
+
 function App() {
   const gameCanvasRef = useRef<GameCanvasHandle>(null);
   const [view, setView] = useState<View>('battle');
@@ -54,18 +70,13 @@ function App() {
   const [restartConfirm, setRestartConfirm] = useState(false);
   const [socialToast, setSocialToast] = useState(false);
 
-  // 背包页签：仅保留 装备/物品/调试
-  const tabs = [
-    { id: 'equipment', label: '装备', icon: '\u2694' },
-    { id: 'inventory', label: '物品', icon: '\uD83C\uDF92' },
-    { id: 'debug', label: '调试', icon: '\u2699' },
-  ];
-
-  const engineRef = {
+  // 背包页签：仅保留 装备/物品/调试（模块级常量，避免每次 render 重建）
+  // engineRef 稳定引用（避免每次 render 创建新对象导致子组件 memo 失效）
+  const engineRef = useMemo(() => ({
     get current() {
       return gameCanvasRef.current?.engine || null;
     },
-  };
+  }), []);
 
   // 切换浮层：点击当前已打开的按钮则关闭，否则切换到新浮层（自动关闭其他）
   const togglePanel = useCallback((panel: Exclude<ActivePanel, null>) => {
@@ -96,72 +107,24 @@ function App() {
     window.setTimeout(() => setSocialToast(false), 1500);
   }, []);
 
-  // 底部按钮配置（单例互斥）- 性能优化：useMemo 缓存，避免每次 render 重建数组
+  // 底部按钮配置 - 性能优化：useMemo 不依赖 activePanel，action 函数引用稳定
+  // active 状态在 render 时单独计算，仅影响对应按钮
   const buttons = useMemo<Array<{
     id: string;
     label: string;
     iconElement: React.ReactNode;
     action: () => void;
-    active: boolean;
     badge?: number;
   }>>(() => [
-    {
-      id: 'character',
-      label: '人物',
-      iconElement: <PixelCharIcon />,
-      action: () => togglePanel('character'),
-      active: activePanel === 'character',
-    },
-    {
-      id: 'skill',
-      label: '技能',
-      iconElement: <PixelSkillIcon />,
-      action: () => togglePanel('skill'),
-      active: activePanel === 'skill',
-    },
-    {
-      id: 'achievement',
-      label: '成就',
-      iconElement: <PixelAchieveIcon />,
-      action: () => togglePanel('codex'),
-      active: activePanel === 'codex',
-    },
-    {
-      id: 'social',
-      label: '社交',
-      iconElement: <PixelSocialIcon />,
-      action: handleSocial,
-      active: false,
-    },
-    {
-      id: 'mail',
-      label: '邮件',
-      iconElement: <PixelMailIcon />,
-      action: () => togglePanel('mail'),
-      active: activePanel === 'mail',
-    },
-    {
-      id: 'bag',
-      label: '背包',
-      iconElement: <PixelBagIcon />,
-      action: () => togglePanel('bag'),
-      active: activePanel === 'bag',
-    },
-    {
-      id: 'restart',
-      label: '重开',
-      iconElement: <PixelRestartIcon />,
-      action: () => setRestartConfirm(true),
-      active: false,
-    },
-    {
-      id: 'home',
-      label: '主界面',
-      iconElement: <PixelHomeIcon />,
-      action: handleBackToMenu,
-      active: false,
-    },
-  ], [activePanel, togglePanel, handleSocial, handleBackToMenu]);
+    { id: 'character', label: '人物', iconElement: <PixelCharIcon />, action: () => togglePanel('character') },
+    { id: 'skill', label: '技能', iconElement: <PixelSkillIcon />, action: () => togglePanel('skill') },
+    { id: 'achievement', label: '成就', iconElement: <PixelAchieveIcon />, action: () => togglePanel('codex') },
+    { id: 'social', label: '社交', iconElement: <PixelSocialIcon />, action: handleSocial },
+    { id: 'mail', label: '邮件', iconElement: <PixelMailIcon />, action: () => togglePanel('mail') },
+    { id: 'bag', label: '背包', iconElement: <PixelBagIcon />, action: () => togglePanel('bag') },
+    { id: 'restart', label: '重开', iconElement: <PixelRestartIcon />, action: () => setRestartConfirm(true) },
+    { id: 'home', label: '主界面', iconElement: <PixelHomeIcon />, action: handleBackToMenu },
+  ], [togglePanel, handleSocial, handleBackToMenu]);
 
   return (
     <div
@@ -227,16 +190,20 @@ function App() {
               padding: '2px 0px 0px',
             }}
           >
-            {buttons.map((btn) => (
-              <PixelButton
-                key={btn.id}
-                iconElement={btn.iconElement}
-                label={btn.label}
-                active={btn.active}
-                onClick={btn.action}
-                badge={btn.badge}
-              />
-            ))}
+            {buttons.map((btn) => {
+              const panelId = BUTTON_PANEL_MAP[btn.id];
+              const active = panelId != null && activePanel === panelId;
+              return (
+                <PixelButton
+                  key={btn.id}
+                  iconElement={btn.iconElement}
+                  label={btn.label}
+                  active={active}
+                  onClick={btn.action}
+                  badge={btn.badge}
+                />
+              );
+            })}
           </div>
 
           {/* 最底部占位框：30px */}
@@ -298,7 +265,7 @@ function App() {
               onClick={(e) => e.stopPropagation()}
             >
               <TabPanel
-                tabs={tabs}
+                tabs={BAG_TABS}
                 activeTab={bagTab}
                 onTabChange={(t) => setBagTab(t as BagTab)}
                 onClose={() => setActivePanel(null)}
