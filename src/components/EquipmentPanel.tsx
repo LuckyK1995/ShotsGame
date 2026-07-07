@@ -6,13 +6,15 @@ import { EnhanceModal } from './EnhanceModal';
 import { EnhanceItemIcon } from './EnhanceItemIcon';
 import { EnchantModal } from './EnchantModal';
 import { EnchantItemIcon } from './EnchantItemIcon';
-import { Equipment, EquipSlot, EquipRarity, SocketedGem } from '../game/types/game';
+import { Equipment, EquipSlot, EquipRarity, SocketedGem, ItemStack } from '../game/types/game';
 import { getEquipmentBonus, getRarityName, RARITY_COLORS, EQUIP_SLOTS, SLOT_LABELS, isEquipmentInActiveSet, getQualitySetGroups, RARITY_LABELS, createEquipment } from '../game/data/equipment';
 import { GEM_TYPE_INFO, GEM_RARITY_LABELS, GEM_RARITY_BG, GEM_RARITY_BORDER, getGemDef, MAX_GEM_SOCKETS, GEMS } from '../game/data/gems';
-import { ENHANCE_ITEMS, ENHANCE_ITEM_ORDER, getEnhanceItemDef, getEnhanceAttackBonus } from '../game/data/enhanceItems';
+import { ENHANCE_ITEMS, getEnhanceItemDef, getEnhanceAttackBonus } from '../game/data/enhanceItems';
 import type { EnhanceItemId } from '../game/data/enhanceItems';
-import { ENCHANT_ITEMS, ENCHANT_ITEM_ORDER, ENCHANT_STAT_INFO, getEnchantItemDef } from '../game/data/enchantItems';
+import { ENCHANT_ITEMS, ENCHANT_STAT_INFO, getEnchantItemDef } from '../game/data/enchantItems';
 import type { EnchantItemId, EnchantStat } from '../game/data/enchantItems';
+import { neonCyan, neonPurple, neonPink, neonYellow, neonText } from '../theme/colors';
+import { hexToRgba } from '../utils/styles';
 
 // 出售价格表（按品质）
 const raritySellMap: Record<EquipRarity, number> = {
@@ -24,46 +26,28 @@ const raritySellMap: Record<EquipRarity, number> = {
   mythic: 500,
 };
 
-const neonCyan = '#00F5D4';
-const neonPurple = '#B026FF';
-const neonPink = '#FF0080';
-const neonYellow = '#FFE600';
-
-function hexToRgba(hex: string, alpha: number): string {
-  const r = parseInt(hex.slice(1, 3), 16);
-  const g = parseInt(hex.slice(3, 5), 16);
-  const b = parseInt(hex.slice(5, 7), 16);
-  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
-}
+// hexToRgba 已移至 utils/styles.ts
+// 装备格子样式：保留本地版本（带 marquee 跑马灯支持 + 无 glow 风格）
+// 性能优化：把内部 Record 提到模块顶层，避免每次调用重新创建
+const BORDER_ALPHA: Record<EquipRarity, number> = {
+  common: 0.3, advanced: 0.4, fine: 0.5,
+  legendary: 0.55, epic: 0.6, mythic: 0.65,
+};
+const RARITY_GRADIENT: Record<string, string> = {
+  common: 'radial-gradient(circle at 50% 45%, #2A2540 0%, #1E1A35 55%, #15122A 100%)',
+  advanced: 'radial-gradient(circle at 50% 45%, #253050 0%, #1A2540 55%, #101830 100%)',
+  fine: 'radial-gradient(circle at 50% 45%, #3A2855 0%, #2A1C45 55%, #1E1035 100%)',
+  legendary: 'radial-gradient(circle at 50% 40%, #8A4A2A 0%, #5A2A10 60%, #3A1A08 100%)',
+  epic: 'radial-gradient(circle at 50% 40%, #7A6A20 0%, #4D4010 60%, #2F2808 100%)',
+  mythic: 'radial-gradient(circle at 50% 40%, #8A2A3A 0%, #5A1A20 60%, #3A0A10 100%)',
+};
 
 const itemSlotStyle = (rarity: EquipRarity, marqueeColor?: string) => {
   const baseColor = RARITY_COLORS[rarity] || RARITY_COLORS.common;
-  const borderAlpha: Record<EquipRarity, number> = {
-    common: 0.3, advanced: 0.4, fine: 0.5,
-    legendary: 0.55, epic: 0.6, mythic: 0.65,
-  };
-  const glowBlur: Record<EquipRarity, number> = {
-    common: 0, advanced: 0, fine: 0,
-    legendary: 0, epic: 0, mythic: 0,
-  };
-  const glowAlpha: Record<EquipRarity, number> = {
-    common: 0, advanced: 0, fine: 0,
-    legendary: 0, epic: 0, mythic: 0,
-  };
-  const rarityGradient: Record<string, string> = {
-    common: 'radial-gradient(circle at 50% 45%, #2A2540 0%, #1E1A35 55%, #15122A 100%)',
-    advanced: 'radial-gradient(circle at 50% 45%, #253050 0%, #1A2540 55%, #101830 100%)',
-    fine: 'radial-gradient(circle at 50% 45%, #3A2855 0%, #2A1C45 55%, #1E1035 100%)',
-    legendary: 'radial-gradient(circle at 50% 40%, #8A4A2A 0%, #5A2A10 60%, #3A1A08 100%)',
-    epic: 'radial-gradient(circle at 50% 40%, #7A6A20 0%, #4D4010 60%, #2F2808 100%)',
-    mythic: 'radial-gradient(circle at 50% 40%, #8A2A3A 0%, #5A1A20 60%, #3A0A10 100%)',
-  };
-  const blur = glowBlur[rarity] || 0;
-  const glow = blur > 0 ? `0 0 ${blur}px ${hexToRgba(baseColor, glowAlpha[rarity] || 0)}` : 'none';
 
   if (marqueeColor) {
     return {
-      background: rarityGradient[rarity],
+      background: RARITY_GRADIENT[rarity],
       border: '2.5px solid transparent',
       borderRadius: '8px',
       boxShadow: 'none',
@@ -75,10 +59,10 @@ const itemSlotStyle = (rarity: EquipRarity, marqueeColor?: string) => {
   }
 
   return {
-    background: rarityGradient[rarity],
-    border: `2.5px solid ${hexToRgba(baseColor, borderAlpha[rarity] || 0.3)}`,
+    background: RARITY_GRADIENT[rarity],
+    border: `2.5px solid ${hexToRgba(baseColor, BORDER_ALPHA[rarity] || 0.3)}`,
     borderRadius: '8px',
-    boxShadow: glow,
+    boxShadow: 'none',
     cursor: 'pointer',
   };
 };
@@ -130,6 +114,9 @@ interface GameEngineRef {
     synthEnchantItem: (
       itemId: string
     ) => { success: boolean; reason?: string; newItemId?: string } | null;
+    syncGemInventory?: (gems: ItemStack[]) => void;
+    syncEnhanceItemInventory?: (items: ItemStack[]) => void;
+    syncEnchantItemInventory?: (items: ItemStack[]) => void;
   } | null;
 }
 
@@ -140,7 +127,7 @@ interface EquipmentPanelProps {
   onShowStats?: () => void;
 }
 
-const EquipmentPanel: React.FC<EquipmentPanelProps> = ({ onTabChange, engineRef, onShowStats }) => {
+const EquipmentPanelImpl: React.FC<EquipmentPanelProps> = ({ onTabChange, engineRef, onShowStats }) => {
   // 用 selector 订阅，避免无关字段变化（玩家坐标/buff/天气）触发整面板重渲染
   const equipment = useGameStore(s => s.equipment);
   const equipmentStorage = useGameStore(s => s.equipmentStorage);
@@ -151,9 +138,19 @@ const EquipmentPanel: React.FC<EquipmentPanelProps> = ({ onTabChange, engineRef,
   const setEquipment = useGameStore(s => s.setEquipment);
   const setEquipmentStorage = useGameStore(s => s.setEquipmentStorage);
   const setGemInventory = useGameStore(s => s.setGemInventory);
+  const setEnhanceItemInventory = useGameStore(s => s.setEnhanceItemInventory);
+  const setEnchantItemInventory = useGameStore(s => s.setEnchantItemInventory);
   const player = { level: playerLevel } as const;
-  // 仓库页签：装备 / 宝石 / 强化 / 附魔（仅装备页签有数据，其他预留扩展）
+  // 仓库页签：装备 / 宝石 / 强化 / 附魔
   const [storageTab, setStorageTab] = useState<'equipment' | 'gem' | 'enhance' | 'enchant'>('equipment');
+
+  // 各仓库容量上限
+  const STORAGE_CAPACITY = {
+    equipment: 100,
+    gem: 50,
+    enhance: 30,
+    enchant: 30,
+  } as const;
   const [selectedItem, setSelectedItem] = useState<
     { equipment: Equipment; source: 'equipped' | 'storage' } | null
   >(null);
@@ -168,6 +165,40 @@ const EquipmentPanel: React.FC<EquipmentPanelProps> = ({ onTabChange, engineRef,
   const [showEnchantModal, setShowEnchantModal] = useState(false);
   const [sortDesc, setSortDesc] = useState(true); // true=由高到低，false=由低到高
   const [showSellPicker, setShowSellPicker] = useState(false);
+  // 装备锁定：lockMode 表示当前处于锁定模式（点击格子切换锁定）；lockedEquipIds 存储已锁定装备 id
+  const [lockMode, setLockMode] = useState(false);
+  const [lockToast, setLockToast] = useState<string | null>(null);
+  const [lockedEquipIds, setLockedEquipIds] = useState<Set<string>>(() => {
+    try {
+      const saved = localStorage.getItem('lockedEquipmentIds');
+      if (saved) return new Set(JSON.parse(saved) as string[]);
+    } catch {}
+    return new Set<string>();
+  });
+
+  // 持久化锁定装备
+  useEffect(() => {
+    try {
+      localStorage.setItem('lockedEquipmentIds', JSON.stringify(Array.from(lockedEquipIds)));
+    } catch {}
+  }, [lockedEquipIds]);
+
+  // 切换装备锁定状态
+  const toggleEquipLock = useCallback((id: string) => {
+    setLockedEquipIds(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }, []);
+
+  // 锁定提示 toast
+  useEffect(() => {
+    if (!lockToast) return;
+    const id = setTimeout(() => setLockToast(null), 1200);
+    return () => clearTimeout(id);
+  }, [lockToast]);
   // 缓存勾选的品质（localStorage），避免重复操作
   const [sellQualities, setSellQualities] = useState<Set<EquipRarity>>(() => {
     try {
@@ -269,6 +300,10 @@ const EquipmentPanel: React.FC<EquipmentPanelProps> = ({ onTabChange, engineRef,
 
   const handleScrap = useCallback(() => {
     if (!selectedItem) return;
+    if (lockedEquipIds.has(selectedItem.equipment.id)) {
+      setLockToast('该装备已锁定，无法出售');
+      return;
+    }
     const gold = raritySellMap[selectedItem.equipment.rarity] || 0;
     if (gold > 0 && engineRef?.current) {
       engineRef.current.addGold(gold);
@@ -279,26 +314,46 @@ const EquipmentPanel: React.FC<EquipmentPanelProps> = ({ onTabChange, engineRef,
       syncBoth(equipment, equipmentStorage.filter((e) => e.id !== selectedItem.equipment.id));
     }
     setSelectedItem(null);
-  }, [selectedItem, equipment, equipmentStorage, syncBoth, engineRef]);
+  }, [selectedItem, equipment, equipmentStorage, syncBoth, engineRef, lockedEquipIds, setLockToast]);
 
   const handleSortStorage = useCallback(() => {
     const order = sortDesc
       ? ['mythic', 'epic', 'legendary', 'fine', 'advanced', 'common']
       : ['common', 'advanced', 'fine', 'legendary', 'epic', 'mythic'];
-    const sorted = [...equipmentStorage].sort((a, b) => {
-      const ra = order.indexOf(a.rarity);
-      const rb = order.indexOf(b.rarity);
-      if (ra !== rb) return ra - rb;
-      return b.level - a.level;
-    });
-    syncBoth(equipment, sorted);
+    // 锁定的装备保持在原 index，未锁定的排序后填入其余位置
+    const unlocked = equipmentStorage
+      .map((e, i) => ({ e, i, locked: lockedEquipIds.has(e.id) }))
+      .filter(x => !x.locked)
+      .map(x => x.e)
+      .sort((a, b) => {
+        const ra = order.indexOf(a.rarity);
+        const rb = order.indexOf(b.rarity);
+        if (ra !== rb) return ra - rb;
+        return b.level - a.level;
+      });
+    const result: Equipment[] = [];
+    let unlockedIdx = 0;
+    for (let i = 0; i < equipmentStorage.length; i++) {
+      if (lockedEquipIds.has(equipmentStorage[i].id)) {
+        result.push(equipmentStorage[i]);
+      } else {
+        if (unlockedIdx < unlocked.length) {
+          result.push(unlocked[unlockedIdx++]);
+        }
+      }
+    }
+    while (unlockedIdx < unlocked.length) {
+      result.push(unlocked[unlockedIdx++]);
+    }
+    syncBoth(equipment, result);
     setSortDesc(!sortDesc);
-  }, [equipmentStorage, equipment, syncBoth, sortDesc]);
+  }, [equipmentStorage, equipment, syncBoth, sortDesc, lockedEquipIds]);
 
   const handleBatchSell = useCallback(() => {
     const selected = Array.from(sellQualities);
     if (selected.length === 0) return;
-    const toSell = equipmentStorage.filter(e => selected.includes(e.rarity));
+    // 过滤掉锁定的装备
+    const toSell = equipmentStorage.filter(e => selected.includes(e.rarity) && !lockedEquipIds.has(e.id));
     if (toSell.length === 0) {
       setShowSellPicker(false);
       return;
@@ -307,9 +362,28 @@ const EquipmentPanel: React.FC<EquipmentPanelProps> = ({ onTabChange, engineRef,
     if (totalGold > 0 && engineRef?.current) {
       engineRef.current.addGold(totalGold);
     }
-    syncBoth(equipment, equipmentStorage.filter(e => !selected.includes(e.rarity)));
+    // 锁定装备保持原 index，未出售的未锁定装备在其余位置按原顺序填入
+    const keepUnlocked = equipmentStorage.filter(e => !(selected.includes(e.rarity) && !lockedEquipIds.has(e.id)) && !lockedEquipIds.has(e.id));
+    const result: Equipment[] = [];
+    let kuIdx = 0;
+    for (let i = 0; i < equipmentStorage.length; i++) {
+      const cur = equipmentStorage[i];
+      if (lockedEquipIds.has(cur.id)) {
+        result.push(cur);
+      } else if (selected.includes(cur.rarity)) {
+        // 被出售，跳过
+      } else {
+        if (kuIdx < keepUnlocked.length) {
+          result.push(keepUnlocked[kuIdx++]);
+        }
+      }
+    }
+    while (kuIdx < keepUnlocked.length) {
+      result.push(keepUnlocked[kuIdx++]);
+    }
+    syncBoth(equipment, result);
     setShowSellPicker(false);
-  }, [equipmentStorage, equipment, sellQualities, syncBoth, engineRef]);
+  }, [equipmentStorage, equipment, sellQualities, syncBoth, engineRef, lockedEquipIds]);
 
   const toggleSellQuality = useCallback((q: EquipRarity) => {
     setSellQualities(prev => {
@@ -323,40 +397,155 @@ const EquipmentPanel: React.FC<EquipmentPanelProps> = ({ onTabChange, engineRef,
   // 预览：当前勾选品质可出售的件数与总价
   const sellPreview = useMemo(() => {
     const selected = Array.from(sellQualities);
-    const toSell = equipmentStorage.filter(e => selected.includes(e.rarity));
-    const totalGold = toSell.reduce((sum, e) => sum + (raritySellMap[e.rarity] || 0), 0);
-    return { count: toSell.length, gold: totalGold };
-  }, [equipmentStorage, sellQualities]);
+    if (storageTab === 'equipment') {
+      const toSell = equipmentStorage.filter(e => selected.includes(e.rarity));
+      const totalGold = toSell.reduce((sum, e) => sum + (raritySellMap[e.rarity] || 0), 0);
+      return { count: toSell.length, gold: totalGold };
+    }
+    // 宝石/强化/附魔仓库：按当前页签库存计算
+    const inv = storageTab === 'gem' ? gemInventory
+      : storageTab === 'enhance' ? enhanceItemInventory
+      : enchantItemInventory;
+    let count = 0;
+    let gold = 0;
+    for (const stack of inv) {
+      let rarity: EquipRarity | undefined;
+      if (storageTab === 'gem') rarity = GEMS[stack.itemId]?.rarity as EquipRarity | undefined;
+      else if (storageTab === 'enhance') rarity = ENHANCE_ITEMS[stack.itemId as EnhanceItemId]?.rarity as EquipRarity | undefined;
+      else rarity = ENCHANT_ITEMS[stack.itemId as EnchantItemId]?.rarity as EquipRarity | undefined;
+      if (!rarity || !selected.includes(rarity)) continue;
+      count += stack.count;
+      gold += (raritySellMap[rarity] || 0) * stack.count;
+    }
+    return { count, gold };
+  }, [storageTab, equipmentStorage, gemInventory, enhanceItemInventory, enchantItemInventory, sellQualities]);
 
-  const neonText = {
-    fontFamily: '"Rajdhani", "Orbitron", "Courier New", monospace',
-    fontWeight: 600,
-    letterSpacing: '0.5px',
-  };
+  // 仓库整理（宝石/强化/附魔）：按品质降序→数量降序排列，同步到 store + 引擎
+  const handleStorageSort = useCallback(() => {
+    const order = sortDesc
+      ? ['mythic', 'epic', 'legendary', 'fine', 'advanced', 'common']
+      : ['common', 'advanced', 'fine', 'legendary', 'epic', 'mythic'];
+    const getRarity = (itemId: string): EquipRarity => {
+      if (storageTab === 'gem') return (GEMS[itemId]?.rarity || 'common') as EquipRarity;
+      if (storageTab === 'enhance') return (ENHANCE_ITEMS[itemId as EnhanceItemId]?.rarity || 'common') as EquipRarity;
+      return (ENCHANT_ITEMS[itemId as EnchantItemId]?.rarity || 'common') as EquipRarity;
+    };
+    const inv = storageTab === 'gem' ? gemInventory
+      : storageTab === 'enhance' ? enhanceItemInventory
+      : enchantItemInventory;
+    const sorted = [...inv].sort((a, b) => {
+      const ra = order.indexOf(getRarity(a.itemId));
+      const rb = order.indexOf(getRarity(b.itemId));
+      if (ra !== rb) return ra - rb;
+      return b.count - a.count;
+    });
+    if (storageTab === 'gem') {
+      setGemInventory(sorted);
+      engineRef?.current?.syncGemInventory?.(sorted);
+    } else if (storageTab === 'enhance') {
+      setEnhanceItemInventory(sorted);
+      engineRef?.current?.syncEnhanceItemInventory?.(sorted);
+    } else {
+      setEnchantItemInventory(sorted);
+      engineRef?.current?.syncEnchantItemInventory?.(sorted);
+    }
+    setSortDesc(!sortDesc);
+  }, [storageTab, sortDesc, gemInventory, enhanceItemInventory, enchantItemInventory, setGemInventory, setEnhanceItemInventory, setEnchantItemInventory, engineRef]);
+
+  // 仓库批量出售（宝石/强化/附魔）：按勾选品质出售全部对应库存
+  const handleStorageBatchSell = useCallback(() => {
+    const selected = Array.from(sellQualities);
+    if (selected.length === 0) {
+      setShowSellPicker(false);
+      return;
+    }
+    const isTarget = (itemId: string): boolean => {
+      let rarity: EquipRarity | undefined;
+      if (storageTab === 'gem') rarity = GEMS[itemId]?.rarity as EquipRarity | undefined;
+      else if (storageTab === 'enhance') rarity = ENHANCE_ITEMS[itemId as EnhanceItemId]?.rarity as EquipRarity | undefined;
+      else rarity = ENCHANT_ITEMS[itemId as EnchantItemId]?.rarity as EquipRarity | undefined;
+      return !!rarity && selected.includes(rarity);
+    };
+    const inv = storageTab === 'gem' ? gemInventory
+      : storageTab === 'enhance' ? enhanceItemInventory
+      : enchantItemInventory;
+    const toSell = inv.filter(s => isTarget(s.itemId));
+    if (toSell.length === 0) {
+      setShowSellPicker(false);
+      return;
+    }
+    const totalGold = toSell.reduce((sum, s) => {
+      let rarity: EquipRarity = 'common';
+      if (storageTab === 'gem') rarity = (GEMS[s.itemId]?.rarity || 'common') as EquipRarity;
+      else if (storageTab === 'enhance') rarity = (ENHANCE_ITEMS[s.itemId as EnhanceItemId]?.rarity || 'common') as EquipRarity;
+      else rarity = (ENCHANT_ITEMS[s.itemId as EnchantItemId]?.rarity || 'common') as EquipRarity;
+      return sum + (raritySellMap[rarity] || 0) * s.count;
+    }, 0);
+    const remaining = inv.filter(s => !isTarget(s.itemId));
+    if (storageTab === 'gem') {
+      setGemInventory(remaining);
+      engineRef?.current?.syncGemInventory?.(remaining);
+    } else if (storageTab === 'enhance') {
+      setEnhanceItemInventory(remaining);
+      engineRef?.current?.syncEnhanceItemInventory?.(remaining);
+    } else {
+      setEnchantItemInventory(remaining);
+      engineRef?.current?.syncEnchantItemInventory?.(remaining);
+    }
+    if (totalGold > 0 && engineRef?.current) {
+      engineRef.current.addGold(totalGold);
+    }
+    setShowSellPicker(false);
+  }, [storageTab, sellQualities, gemInventory, enhanceItemInventory, enchantItemInventory, setGemInventory, setEnhanceItemInventory, setEnchantItemInventory, engineRef]);
+
+  // 统一批量出售入口：装备仓库走原 handleBatchSell，其余走 handleStorageBatchSell
+  const onBatchSellClick = useCallback(() => {
+    if (storageTab === 'equipment') handleBatchSell();
+    else handleStorageBatchSell();
+  }, [storageTab, handleBatchSell, handleStorageBatchSell]);
+
+  // 统一整理入口：装备仓库走原 handleSortStorage，其余走 handleStorageSort
+  const onSortClick = useCallback(() => {
+    if (storageTab === 'equipment') handleSortStorage();
+    else handleStorageSort();
+  }, [storageTab, handleSortStorage, handleStorageSort]);
+
+  // 出售品质选择弹窗：按当前仓库页签统计各品质件数与金币
+  const qualityStats = useMemo(() => {
+    const stats: Record<string, { count: number; gold: number }> = {};
+    (['mythic', 'epic', 'legendary', 'fine', 'advanced', 'common'] as EquipRarity[]).forEach(q => {
+      stats[q] = { count: 0, gold: 0 };
+    });
+    if (storageTab === 'equipment') {
+      for (const e of equipmentStorage) {
+        if (!stats[e.rarity]) continue;
+        stats[e.rarity].count += 1;
+        stats[e.rarity].gold += raritySellMap[e.rarity] || 0;
+      }
+    } else {
+      const inv = storageTab === 'gem' ? gemInventory
+        : storageTab === 'enhance' ? enhanceItemInventory
+        : enchantItemInventory;
+      for (const stack of inv) {
+        let rarity: EquipRarity | undefined;
+        if (storageTab === 'gem') rarity = GEMS[stack.itemId]?.rarity as EquipRarity | undefined;
+        else if (storageTab === 'enhance') rarity = ENHANCE_ITEMS[stack.itemId as EnhanceItemId]?.rarity as EquipRarity | undefined;
+        else rarity = ENCHANT_ITEMS[stack.itemId as EnchantItemId]?.rarity as EquipRarity | undefined;
+        if (!rarity || !stats[rarity]) continue;
+        stats[rarity].count += stack.count;
+        stats[rarity].gold += (raritySellMap[rarity] || 0) * stack.count;
+      }
+    }
+    return stats;
+  }, [storageTab, equipmentStorage, gemInventory, enhanceItemInventory, enchantItemInventory]);
 
   return (
-    <div className="h-full flex relative gap-2" style={{ color: '#E0E0FF' }}>
-      {/* 跑马灯样式：SVG 虚线边框，5px实5px空，5px/秒顺时针流动 */}
-      <style>{`
-        .marquee-slot .marquee-border {
-          position: absolute;
-          top: -2.5px; left: -2.5px;
-          width: calc(100% + 5px);
-          height: calc(100% + 5px);
-          pointer-events: none;
-        }
-        .marquee-slot .marquee-border rect {
-          fill: none;
-          stroke: var(--mc);
-          stroke-width: 2.5;
-          stroke-dasharray: 5 5;
-          animation: marqueeDash 2s linear infinite;
-        }
-        @keyframes marqueeDash {
-          0%   { stroke-dashoffset: 0; }
-          100% { stroke-dashoffset: -10; }
-        }
-      `}</style>
+    <div
+      className="h-full flex relative gap-2"
+      style={{ color: '#E0E0FF', ...(lockMode ? { cursor: 'cell' } : {}) }}
+      onClick={() => { if (lockMode) setLockMode(false); }}
+    >
+      {/* 跑马灯样式：keyframes 已提取至 index.css */}
       <div className="w-1/3 flex flex-col gap-1.5">
         <div
           style={{ ...neonText, fontSize: '9px', color: neonCyan, letterSpacing: '1px' }}
@@ -512,18 +701,51 @@ const EquipmentPanel: React.FC<EquipmentPanelProps> = ({ onTabChange, engineRef,
                   justifyContent: 'space-between',
                 }}
               >
-                {Array.from({ length: Math.max(equipmentStorage.length, 45) }).map((_, index) => {
+                {Array.from({ length: Math.max(equipmentStorage.length, STORAGE_CAPACITY.equipment) }).map((_, index) => {
                   const item = equipmentStorage[index];
+                  const isLocked = item ? lockedEquipIds.has(item.id) : false;
                   return (
                     <div
                       key={index}
                       className="flex flex-col items-center justify-center cursor-pointer relative"
-                      style={{ width: '36px', height: '36px', marginBottom: '1px', ...(item ? itemSlotStyle(item.rarity) : storageEmptyStyle) }}
-                      onClick={() => item && handleStorageClick(item)}
+                      style={{
+                        width: '36px',
+                        height: '36px',
+                        marginBottom: '1px',
+                        ...(item ? itemSlotStyle(item.rarity) : storageEmptyStyle),
+                        ...(lockMode ? { cursor: isLocked ? 'pointer' : 'cell' } : {}),
+                      }}
+                      onClick={(e) => {
+                        if (!item) return;
+                        if (lockMode) {
+                          e.stopPropagation();
+                          toggleEquipLock(item.id);
+                        } else {
+                          handleStorageClick(item);
+                        }
+                      }}
                     >
                       {item ? (
                         <>
                           <EquipmentIcon slot={item.slot} rarity={item.rarity} variant={item.iconVariant} size={28} gemCount={item.socketedGems?.length || 0} enhanceLevel={item.enhanceLevel || 0} level={item.level} />
+                          {isLocked && (
+                            <span
+                              className="absolute"
+                              style={{
+                                left: '-2px',
+                                top: '50%',
+                                transform: 'translateY(-50%)',
+                                fontSize: '11px',
+                                color: neonYellow,
+                                textShadow: `0 0 4px ${hexToRgba(neonYellow, 0.7)}`,
+                                zIndex: 5,
+                                pointerEvents: 'none',
+                                lineHeight: 1,
+                              }}
+                            >
+                              🔒
+                            </span>
+                          )}
                         </>
                       ) : null}
                     </div>
@@ -544,21 +766,37 @@ const EquipmentPanel: React.FC<EquipmentPanelProps> = ({ onTabChange, engineRef,
                   lineHeight: 1,
                 }}
               >
-                {equipmentStorage.length}/200
+                {equipmentStorage.length}/{STORAGE_CAPACITY.equipment}
               </span>
               {/* 右侧：操作按钮 */}
-              <div className="flex gap-2">
+              <div className="flex gap-2 items-center">
+                <button
+                  onClick={(e) => { e.stopPropagation(); setLockMode(m => !m); }}
+                  title={lockMode ? '点击仓库格子切换锁定，点击空白处解除' : '进入锁定模式'}
+                  style={{
+                    fontSize: '11px',
+                    color: lockMode ? neonPink : (lockedEquipIds.size > 0 ? neonYellow : '#8B80A0'),
+                    background: lockMode ? 'rgba(255, 0, 128, 0.15)' : (lockedEquipIds.size > 0 ? 'rgba(255, 230, 0, 0.1)' : 'rgba(19, 16, 37, 0.5)'),
+                    border: `1px solid ${lockMode ? 'rgba(255, 0, 128, 0.5)' : (lockedEquipIds.size > 0 ? 'rgba(255, 230, 0, 0.3)' : 'rgba(100, 100, 130, 0.2)')}`,
+                    borderRadius: '6px',
+                    padding: '2px 6px',
+                    cursor: 'pointer',
+                    lineHeight: 1,
+                    boxShadow: lockMode ? `0 0 8px rgba(255, 0, 128, 0.3)` : 'none',
+                  }}
+                >
+                  {lockMode ? '✕' : '🔒'}
+                </button>
                 <button
                   onClick={handleSortStorage}
                   style={{
                     fontFamily: '"Rajdhani", "Orbitron", monospace',
                     fontSize: '8px',
                     fontWeight: 600,
-                    color: neonPurple,
-                    background: 'rgba(176, 38, 255, 0.1)',
-                    border: '1px solid rgba(176, 38, 255, 0.25)',
+                    color: neonCyan,
+                    background: 'rgba(0, 245, 212, 0.1)',
+                    border: '1px solid rgba(0, 245, 212, 0.3)',
                     borderRadius: '6px',
-                    boxShadow: '0 0 6px rgba(176, 38, 255, 0.1)',
                     padding: '4px 8px',
                     cursor: 'pointer',
                     minWidth: '52px',
@@ -587,264 +825,305 @@ const EquipmentPanel: React.FC<EquipmentPanelProps> = ({ onTabChange, engineRef,
             </div>
           </>
         ) : storageTab === 'gem' ? (
-          /* 宝石页签：与物品栏一致的网格布局 + 点击弹窗 */
-          <div
-            className="flex-1 overflow-y-auto p-1.5"
-            style={{
-              background: 'rgba(13, 11, 26, 0.4)',
-              borderRadius: '8px',
-              border: '1px solid rgba(176, 38, 255, 0.1)',
-            }}
-          >
+          <>
             <div
-              className="grid gap-1"
+              className="flex-1 overflow-y-auto p-1.5"
               style={{
-                gridTemplateColumns: 'repeat(5, 36px)',
-                rowGap: '1px',
-                justifyContent: 'space-between',
+                background: 'rgba(13, 11, 26, 0.4)',
+                borderRadius: '8px',
+                border: '1px solid rgba(176, 38, 255, 0.1)',
               }}
             >
-              {Object.values(GEMS).map(gem => {
-                const stack = gemInventory.find(s => s.itemId === gem.id);
-                const count = stack?.count ?? 0;
-                const info = GEM_TYPE_INFO[gem.type];
-                const isSelected = selectedGem?.gemId === gem.id;
-                return (
+              <div
+                className="grid gap-1"
+                style={{
+                  gridTemplateColumns: 'repeat(5, 36px)',
+                  rowGap: '1px',
+                  justifyContent: 'space-between',
+                }}
+              >
+                {gemInventory.map(stack => {
+                  const gem = GEMS[stack.itemId];
+                  if (!gem) return null;
+                  const count = stack.count;
+                  const info = GEM_TYPE_INFO[gem.type];
+                  const isSelected = selectedGem?.gemId === gem.id;
+                  return (
+                    <div
+                      key={gem.id}
+                      className={`flex flex-col items-center justify-center relative overflow-hidden cursor-pointer ${
+                        isSelected ? 'ring-2 ring-[#00F5D4]' : ''
+                      }`}
+                      style={{
+                        width: '36px',
+                        height: '36px',
+                        marginBottom: '1px',
+                        background: GEM_RARITY_BG[gem.rarity],
+                        border: `2.5px solid ${GEM_RARITY_BORDER[gem.rarity]}`,
+                        borderRadius: '8px',
+                      }}
+                      title={`${gem.name} ×${count}`}
+                      onClick={() => count > 0 && setSelectedGem({ gemId: gem.id, count })}
+                    >
+                      <span style={{ fontSize: '16px', filter: 'drop-shadow(0 0 3px rgba(255,255,255,0.3))' }}>
+                        {gem.icon}
+                      </span>
+                      {/* 左下角：宝石类型首字标识 */}
+                      <span
+                        className="absolute bottom-0.5 left-1"
+                        style={{
+                          fontFamily: '"Rajdhani", "Orbitron", monospace',
+                          fontSize: '8px',
+                          color: info.color,
+                          fontWeight: 700,
+                          textShadow: '0 0 3px rgba(0,0,0,0.8)',
+                        }}
+                      >
+                        {info.short}
+                      </span>
+                      {/* 右下角：数量 */}
+                      {count > 0 && (
+                        <span
+                          className="absolute bottom-0.5 right-0.5 text-[7px] px-1"
+                          style={{
+                            fontFamily: '"Rajdhani", "Orbitron", monospace',
+                            color: '#0D0B1A',
+                            backgroundColor: neonCyan,
+                            borderRadius: '3px',
+                            fontWeight: 700,
+                          }}
+                        >
+                          {count}
+                        </span>
+                      )}
+                    </div>
+                  );
+                })}
+                {/* 空格子占位填充：仅填充至容量上限 */}
+                {Array(Math.max(0, STORAGE_CAPACITY.gem - gemInventory.length)).fill(null).map((_, index) => (
                   <div
-                    key={gem.id}
-                    className={`flex flex-col items-center justify-center relative overflow-hidden cursor-pointer ${
-                      isSelected ? 'ring-2 ring-[#00F5D4]' : ''
-                    }`}
+                    key={`gem-empty-${index}`}
                     style={{
                       width: '36px',
                       height: '36px',
-                      marginBottom: '1px',
-                      background: GEM_RARITY_BG[gem.rarity],
-                      border: `2.5px solid ${GEM_RARITY_BORDER[gem.rarity]}`,
+                      background: 'rgba(19, 16, 37, 0.2)',
+                      border: '2.5px solid rgba(100, 100, 130, 0.15)',
                       borderRadius: '8px',
-                      opacity: count > 0 ? 1 : 0.4,
+                      opacity: 0.6,
                     }}
-                    title={`${gem.name} ×${count}`}
-                    onClick={() => count > 0 && setSelectedGem({ gemId: gem.id, count })}
-                  >
-                    <span style={{ fontSize: '16px', filter: 'drop-shadow(0 0 3px rgba(255,255,255,0.3))' }}>
-                      {gem.icon}
-                    </span>
-                    {/* 左下角：宝石类型首字标识 */}
-                    <span
-                      className="absolute bottom-0.5 left-1"
-                      style={{
-                        fontFamily: '"Rajdhani", "Orbitron", monospace',
-                        fontSize: '8px',
-                        color: info.color,
-                        fontWeight: 700,
-                        textShadow: '0 0 3px rgba(0,0,0,0.8)',
-                      }}
-                    >
-                      {info.short}
-                    </span>
-                    {/* 右下角：数量 */}
-                    {count > 0 && (
-                      <span
-                        className="absolute bottom-0.5 right-0.5 text-[7px] px-1"
-                        style={{
-                          fontFamily: '"Rajdhani", "Orbitron", monospace',
-                          color: '#0D0B1A',
-                          backgroundColor: neonCyan,
-                          borderRadius: '3px',
-                          fontWeight: 700,
-                        }}
-                      >
-                        {count}
-                      </span>
-                    )}
-                  </div>
-                );
-              })}
-              {/* 空格子占位填充（与物品栏一致） */}
-              {Array(Math.max(0, 15 - Object.values(GEMS).length)).fill(null).map((_, index) => (
-                <div
-                  key={`gem-empty-${index}`}
-                  style={{
-                    width: '36px',
-                    height: '36px',
-                    background: 'rgba(19, 16, 37, 0.2)',
-                    border: '2.5px solid rgba(100, 100, 130, 0.15)',
-                    borderRadius: '8px',
-                    opacity: 0.6,
-                  }}
-                />
-              ))}
+                  />
+                ))}
+              </div>
             </div>
-          </div>
+            <div className="flex justify-between items-center gap-2 pt-1" style={{ borderTop: '1px solid rgba(176, 38, 255, 0.15)' }}>
+              <span style={{ fontFamily: '"Rajdhani", "Orbitron", monospace', fontSize: '9px', color: '#8B80A0', fontWeight: 600, letterSpacing: '0.5px', lineHeight: 1 }}>
+                {gemInventory.length}/{STORAGE_CAPACITY.gem}
+              </span>
+              <div className="flex gap-2">
+                <button onClick={onSortClick} style={{ fontFamily: '"Rajdhani", "Orbitron", monospace', fontSize: '8px', fontWeight: 600, color: neonCyan, background: 'rgba(0, 245, 212, 0.1)', border: '1px solid rgba(0, 245, 212, 0.3)', borderRadius: '6px', padding: '4px 8px', cursor: 'pointer', minWidth: '52px' }}>
+                  整理
+                </button>
+                <button onClick={() => setShowSellPicker(true)} style={{ fontFamily: '"Rajdhani", "Orbitron", monospace', fontSize: '8px', fontWeight: 600, color: neonYellow, background: 'rgba(255, 215, 0, 0.1)', border: '1px solid rgba(255, 215, 0, 0.3)', borderRadius: '6px', padding: '4px 8px', cursor: 'pointer' }}>
+                  批量出售
+                </button>
+              </div>
+            </div>
+          </>
         ) : storageTab === 'enhance' ? (
-          /* 强化页签：与宝石页签一致的网格布局，展示强化道具 */
-          <div
-            className="flex-1 overflow-y-auto p-1.5"
-            style={{
-              background: 'rgba(13, 11, 26, 0.4)',
-              borderRadius: '8px',
-              border: '1px solid rgba(176, 38, 255, 0.1)',
-            }}
-          >
+          <>
             <div
-              className="grid gap-1"
+              className="flex-1 overflow-y-auto p-1.5"
               style={{
-                gridTemplateColumns: 'repeat(5, 36px)',
-                rowGap: '1px',
-                justifyContent: 'space-between',
+                background: 'rgba(13, 11, 26, 0.4)',
+                borderRadius: '8px',
+                border: '1px solid rgba(176, 38, 255, 0.1)',
               }}
             >
-              {ENHANCE_ITEM_ORDER.map(id => {
-                const def = ENHANCE_ITEMS[id];
-                const stack = enhanceItemInventory.find(s => s.itemId === id);
-                const count = stack?.count ?? 0;
-                const rarityColor = RARITY_COLORS[def.rarity] || '#9A9A9A';
-                return (
-                  <div
-                    key={id}
-                    className="flex flex-col items-center justify-center relative cursor-pointer"
-                    style={{
-                      width: '36px',
-                      height: '36px',
-                      marginBottom: '1px',
-                      background: `radial-gradient(circle at 50% 40%, ${rarityColor}33 0%, ${rarityColor}11 55%, #15122A 100%)`,
-                      border: `2.5px solid ${rarityColor}`,
-                      borderRadius: '8px',
-                      opacity: count > 0 ? 1 : 0.4,
-                    }}
-                    title={`${def.name} ×${count}\n${def.description}`}
-                    onClick={() => count > 0 && setSelectedEnhanceItem({ itemId: id, count })}
-                  >
-                    <EnhanceItemIcon itemId={id} size={28} />
-                    {/* 右下角：数量 */}
-                    {count > 0 && (
-                      <span
-                        className="absolute bottom-0.5 right-0.5"
-                        style={{
-                          fontFamily: '"Rajdhani", "Orbitron", monospace',
-                          fontSize: '7px',
-                          color: '#0D0B1A',
-                          backgroundColor: neonCyan,
-                          borderRadius: '3px',
-                          fontWeight: 700,
-                          padding: '0 3px',
-                        }}
-                      >
-                        {count}
-                      </span>
-                    )}
-                  </div>
-                );
-              })}
-              {/* 空格子占位填充（与物品栏一致） */}
-              {Array(Math.max(0, 11 - ENHANCE_ITEM_ORDER.length)).fill(null).map((_, index) => (
-                <div
-                  key={`enhance-empty-${index}`}
-                  style={{
-                    width: '36px',
-                    height: '36px',
-                    background: 'rgba(19, 16, 37, 0.2)',
-                    border: '2.5px solid rgba(100, 100, 130, 0.15)',
-                    borderRadius: '8px',
-                    opacity: 0.6,
-                  }}
-                />
-              ))}
-            </div>
-          </div>
-        ) : storageTab === 'enchant' ? (
-          /* 附魔页签：与强化页签一致的网格布局，展示附魔书 */
-          <div
-            className="flex-1 overflow-y-auto p-1.5"
-            style={{
-              background: 'rgba(13, 11, 26, 0.4)',
-              borderRadius: '8px',
-              border: '1px solid rgba(176, 38, 255, 0.1)',
-            }}
-          >
-            <div
-              className="grid gap-1"
-              style={{
-                gridTemplateColumns: 'repeat(5, 36px)',
-                rowGap: '1px',
-                justifyContent: 'space-between',
-              }}
-            >
-              {ENCHANT_ITEM_ORDER.map(id => {
-                const def = ENCHANT_ITEMS[id];
-                const stack = enchantItemInventory.find(s => s.itemId === id);
-                const count = stack?.count ?? 0;
-                const rarityColor = RARITY_COLORS[def.rarity] || '#9A9A9A';
-                const statColor = ENCHANT_STAT_INFO[def.stat].color;
-                return (
-                  <div
-                    key={id}
-                    className="flex flex-col items-center justify-center relative cursor-pointer"
-                    style={{
-                      width: '36px',
-                      height: '36px',
-                      marginBottom: '1px',
-                      background: `radial-gradient(circle at 50% 40%, ${rarityColor}33 0%, ${rarityColor}11 55%, #15122A 100%)`,
-                      border: `2.5px solid ${rarityColor}`,
-                      borderRadius: '8px',
-                      opacity: count > 0 ? 1 : 0.4,
-                    }}
-                    title={`${def.name} ×${count}\n${def.description}`}
-                    onClick={() => count > 0 && setSelectedEnchantItem({ itemId: id, count })}
-                  >
-                    <EnchantItemIcon itemId={id} size={28} />
-                    {/* 左下角：属性首字标识 */}
-                    <span
-                      className="absolute bottom-0.5 left-0.5"
+              <div
+                className="grid gap-1"
+                style={{
+                  gridTemplateColumns: 'repeat(5, 36px)',
+                  rowGap: '1px',
+                  justifyContent: 'space-between',
+                }}
+              >
+                {enhanceItemInventory.map(stack => {
+                  const id = stack.itemId as EnhanceItemId;
+                  const def = ENHANCE_ITEMS[id];
+                  if (!def) return null;
+                  const count = stack.count;
+                  const rarityColor = RARITY_COLORS[def.rarity] || '#9A9A9A';
+                  return (
+                    <div
+                      key={id}
+                      className="flex flex-col items-center justify-center relative cursor-pointer"
                       style={{
-                        fontFamily: '"Rajdhani", "Orbitron", monospace',
-                        fontSize: '7px',
-                        color: statColor,
-                        fontWeight: 700,
-                        textShadow: '0 0 3px rgba(0,0,0,0.8)',
+                        width: '36px',
+                        height: '36px',
+                        marginBottom: '1px',
+                        background: `radial-gradient(circle at 50% 40%, ${rarityColor}33 0%, ${rarityColor}11 55%, #15122A 100%)`,
+                        border: `2.5px solid ${rarityColor}`,
+                        borderRadius: '8px',
                       }}
+                      title={`${def.name} ×${count}\n${def.description}`}
+                      onClick={() => count > 0 && setSelectedEnhanceItem({ itemId: id, count })}
                     >
-                      {ENCHANT_STAT_INFO[def.stat].label}
-                    </span>
-                    {/* 右下角：数量 */}
-                    {count > 0 && (
+                      <EnhanceItemIcon itemId={id} size={28} />
+                      {/* 右下角：数量 */}
+                      {count > 0 && (
+                        <span
+                          className="absolute bottom-0.5 right-0.5"
+                          style={{
+                            fontFamily: '"Rajdhani", "Orbitron", monospace',
+                            fontSize: '7px',
+                            color: '#0D0B1A',
+                            backgroundColor: neonCyan,
+                            borderRadius: '3px',
+                            fontWeight: 700,
+                            padding: '0 3px',
+                          }}
+                        >
+                          {count}
+                        </span>
+                      )}
+                    </div>
+                  );
+                })}
+                {/* 空格子占位填充：仅填充至容量上限 */}
+                {Array(Math.max(0, STORAGE_CAPACITY.enhance - enhanceItemInventory.length)).fill(null).map((_, index) => (
+                  <div
+                    key={`enhance-empty-${index}`}
+                    style={{
+                      width: '36px',
+                      height: '36px',
+                      background: 'rgba(19, 16, 37, 0.2)',
+                      border: '2.5px solid rgba(100, 100, 130, 0.15)',
+                      borderRadius: '8px',
+                      opacity: 0.6,
+                    }}
+                  />
+                ))}
+              </div>
+            </div>
+            <div className="flex justify-between items-center gap-2 pt-1" style={{ borderTop: '1px solid rgba(176, 38, 255, 0.15)' }}>
+              <span style={{ fontFamily: '"Rajdhani", "Orbitron", monospace', fontSize: '9px', color: '#8B80A0', fontWeight: 600, letterSpacing: '0.5px', lineHeight: 1 }}>
+                {enhanceItemInventory.length}/{STORAGE_CAPACITY.enhance}
+              </span>
+              <div className="flex gap-2">
+                <button onClick={onSortClick} style={{ fontFamily: '"Rajdhani", "Orbitron", monospace', fontSize: '8px', fontWeight: 600, color: neonCyan, background: 'rgba(0, 245, 212, 0.1)', border: '1px solid rgba(0, 245, 212, 0.3)', borderRadius: '6px', padding: '4px 8px', cursor: 'pointer', minWidth: '52px' }}>
+                  整理
+                </button>
+                <button onClick={() => setShowSellPicker(true)} style={{ fontFamily: '"Rajdhani", "Orbitron", monospace', fontSize: '8px', fontWeight: 600, color: neonYellow, background: 'rgba(255, 215, 0, 0.1)', border: '1px solid rgba(255, 215, 0, 0.3)', borderRadius: '6px', padding: '4px 8px', cursor: 'pointer' }}>
+                  批量出售
+                </button>
+              </div>
+            </div>
+          </>
+        ) : storageTab === 'enchant' ? (
+          <>
+            <div
+              className="flex-1 overflow-y-auto p-1.5"
+              style={{
+                background: 'rgba(13, 11, 26, 0.4)',
+                borderRadius: '8px',
+                border: '1px solid rgba(176, 38, 255, 0.1)',
+              }}
+            >
+              <div
+                className="grid gap-1"
+                style={{
+                  gridTemplateColumns: 'repeat(5, 36px)',
+                  rowGap: '1px',
+                  justifyContent: 'space-between',
+                }}
+              >
+                {enchantItemInventory.map(stack => {
+                  const id = stack.itemId as EnchantItemId;
+                  const def = ENCHANT_ITEMS[id];
+                  if (!def) return null;
+                  const count = stack.count;
+                  const rarityColor = RARITY_COLORS[def.rarity] || '#9A9A9A';
+                  const statColor = ENCHANT_STAT_INFO[def.stat].color;
+                  return (
+                    <div
+                      key={id}
+                      className="flex flex-col items-center justify-center relative cursor-pointer"
+                      style={{
+                        width: '36px',
+                        height: '36px',
+                        marginBottom: '1px',
+                        background: `radial-gradient(circle at 50% 40%, ${rarityColor}33 0%, ${rarityColor}11 55%, #15122A 100%)`,
+                        border: `2.5px solid ${rarityColor}`,
+                        borderRadius: '8px',
+                      }}
+                      title={`${def.name} ×${count}\n${def.description}`}
+                      onClick={() => count > 0 && setSelectedEnchantItem({ itemId: id, count })}
+                    >
+                      <EnchantItemIcon itemId={id} size={28} />
+                      {/* 左下角：属性首字标识 */}
                       <span
-                        className="absolute bottom-0.5 right-0.5"
+                        className="absolute bottom-0.5 left-0.5"
                         style={{
                           fontFamily: '"Rajdhani", "Orbitron", monospace',
                           fontSize: '7px',
-                          color: '#0D0B1A',
-                          backgroundColor: neonCyan,
-                          borderRadius: '3px',
+                          color: statColor,
                           fontWeight: 700,
-                          padding: '0 3px',
+                          textShadow: '0 0 3px rgba(0,0,0,0.8)',
                         }}
                       >
-                        {count}
+                        {ENCHANT_STAT_INFO[def.stat].label}
                       </span>
-                    )}
-                  </div>
-                );
-              })}
+                      {/* 右下角：数量 */}
+                      {count > 0 && (
+                        <span
+                          className="absolute bottom-0.5 right-0.5"
+                          style={{
+                            fontFamily: '"Rajdhani", "Orbitron", monospace',
+                            fontSize: '7px',
+                            color: '#0D0B1A',
+                            backgroundColor: neonCyan,
+                            borderRadius: '3px',
+                            fontWeight: 700,
+                            padding: '0 3px',
+                          }}
+                        >
+                          {count}
+                        </span>
+                      )}
+                    </div>
+                  );
+                })}
+                {/* 空格子占位填充：仅填充至容量上限 */}
+                {Array(Math.max(0, STORAGE_CAPACITY.enchant - enchantItemInventory.length)).fill(null).map((_, index) => (
+                  <div
+                    key={`enchant-empty-${index}`}
+                    style={{
+                      width: '36px',
+                      height: '36px',
+                      background: 'rgba(19, 16, 37, 0.2)',
+                      border: '2.5px solid rgba(100, 100, 130, 0.15)',
+                      borderRadius: '8px',
+                      opacity: 0.6,
+                    }}
+                  />
+                ))}
+              </div>
             </div>
-          </div>
-        ) : (
-          <div
-            className="flex-1 flex items-center justify-center"
-            style={{
-              background: 'rgba(13, 11, 26, 0.4)',
-              borderRadius: '8px',
-              border: '1px solid rgba(176, 38, 255, 0.1)',
-              color: '#5A5A7A',
-              fontFamily: '"Rajdhani", "Orbitron", monospace',
-              fontSize: '10px',
-              letterSpacing: '1px',
-            }}
-          >
-            敬请期待
-          </div>
-        )}
+            <div className="flex justify-between items-center gap-2 pt-1" style={{ borderTop: '1px solid rgba(176, 38, 255, 0.15)' }}>
+              <span style={{ fontFamily: '"Rajdhani", "Orbitron", monospace', fontSize: '9px', color: '#8B80A0', fontWeight: 600, letterSpacing: '0.5px', lineHeight: 1 }}>
+                {enchantItemInventory.length}/{STORAGE_CAPACITY.enchant}
+              </span>
+              <div className="flex gap-2">
+                <button onClick={onSortClick} style={{ fontFamily: '"Rajdhani", "Orbitron", monospace', fontSize: '8px', fontWeight: 600, color: neonCyan, background: 'rgba(0, 245, 212, 0.1)', border: '1px solid rgba(0, 245, 212, 0.3)', borderRadius: '6px', padding: '4px 8px', cursor: 'pointer', minWidth: '52px' }}>
+                  整理
+                </button>
+                <button onClick={() => setShowSellPicker(true)} style={{ fontFamily: '"Rajdhani", "Orbitron", monospace', fontSize: '8px', fontWeight: 600, color: neonYellow, background: 'rgba(255, 215, 0, 0.1)', border: '1px solid rgba(255, 215, 0, 0.3)', borderRadius: '6px', padding: '4px 8px', cursor: 'pointer' }}>
+                  批量出售
+                </button>
+              </div>
+            </div>
+          </>
+        ) : null}
       </div>
 
       {/* 选中物品弹窗 */}
@@ -1219,6 +1498,40 @@ const EquipmentPanel: React.FC<EquipmentPanelProps> = ({ onTabChange, engineRef,
         </div>
       )}
 
+      {/* 锁定提示 toast */}
+      {lockToast && (
+        <div
+          className="absolute left-1/2 top-2 z-40"
+          style={{
+            transform: 'translateX(-50%)',
+            fontFamily: '"Rajdhani", "Orbitron", monospace',
+            fontSize: '10px',
+            fontWeight: 600,
+            color: neonPink,
+            background: 'rgba(40, 10, 25, 0.9)',
+            border: `1px solid ${hexToRgba(neonPink, 0.5)}`,
+            borderRadius: '6px',
+            padding: '4px 10px',
+            boxShadow: `0 0 10px ${hexToRgba(neonPink, 0.3)}`,
+            pointerEvents: 'none',
+            whiteSpace: 'nowrap',
+          }}
+        >
+          {lockToast}
+        </div>
+      )}
+
+      {/* 锁定模式遮罩提示 */}
+      {lockMode && (
+        <div
+          className="absolute inset-0 pointer-events-none z-20"
+          style={{
+            background: 'repeating-linear-gradient(45deg, transparent, transparent 8px, rgba(255, 0, 128, 0.04) 8px, rgba(255, 0, 128, 0.04) 16px)',
+            borderRadius: '12px',
+          }}
+        />
+      )}
+
       {/* 批量出售品质选择弹窗 */}
       {showSellPicker && (
         <div
@@ -1259,8 +1572,9 @@ const EquipmentPanel: React.FC<EquipmentPanelProps> = ({ onTabChange, engineRef,
             <div className="grid grid-cols-3 gap-1.5 mb-3">
               {(['mythic', 'epic', 'legendary', 'fine', 'advanced', 'common'] as EquipRarity[]).map(q => {
                 const checked = sellQualities.has(q);
-                const count = equipmentStorage.filter(e => e.rarity === q).length;
-                const gold = count * (raritySellMap[q] || 0);
+                const stat = qualityStats[q] || { count: 0, gold: 0 };
+                const count = stat.count;
+                const gold = stat.gold;
                 return (
                   <label
                     key={q}
@@ -1312,7 +1626,7 @@ const EquipmentPanel: React.FC<EquipmentPanelProps> = ({ onTabChange, engineRef,
               </span>
             </div>
             <button
-              onClick={handleBatchSell}
+              onClick={onBatchSellClick}
               disabled={sellPreview.count === 0}
               style={{
                 width: '100%',
@@ -1804,6 +2118,8 @@ const EquipmentPanel: React.FC<EquipmentPanelProps> = ({ onTabChange, engineRef,
   );
 };
 
+// 性能优化：memo 包装
+const EquipmentPanel = React.memo(EquipmentPanelImpl);
 export { EquipmentPanel };
 
 function EquipStatRow({ label, value, color }: { label: string; value: string; color: string }) {

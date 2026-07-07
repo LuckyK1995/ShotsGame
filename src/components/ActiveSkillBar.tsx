@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, memo } from 'react';
 import { useGameStore } from '../store/gameStore';
 import type { ActiveSkill } from '../game/types/game';
 
@@ -13,8 +13,9 @@ interface ActiveSkillBarProps {
   engineRef: EngineRef;
 }
 
-export function ActiveSkillBar({ engineRef }: ActiveSkillBarProps) {
-  const { activeSkills } = useGameStore();
+function ActiveSkillBarImpl({ engineRef }: ActiveSkillBarProps) {
+  // 性能优化：使用细粒度 selector
+  const activeSkills = useGameStore(s => s.activeSkills);
   const [skills, setSkills] = useState<ActiveSkill[]>([]);
 
   useEffect(() => {
@@ -92,3 +93,6 @@ export function ActiveSkillBar({ engineRef }: ActiveSkillBarProps) {
     </div>
   );
 }
+
+// 性能优化：memo 包装
+export const ActiveSkillBar = memo(ActiveSkillBarImpl);

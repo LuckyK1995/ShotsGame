@@ -1,20 +1,20 @@
+import { memo } from 'react';
 import { useGameStore } from '../store/gameStore';
-
-const neonPurple = '#B026FF';
-const neonCyan = '#00F5D4';
-const neonRed = '#FF2D55';
-const neonYellow = '#FFE600';
+import { neonPurple, neonCyan, neonRed, neonYellow } from '../theme/colors';
 
 interface GameOverModalProps {
   onRestart: () => void;
   onBackToMenu: () => void;
 }
 
-export function GameOverModal({ onRestart, onBackToMenu }: GameOverModalProps) {
-  const { gameState, player } = useGameStore();
+function GameOverModalImpl({ onRestart, onBackToMenu }: GameOverModalProps) {
+  // 性能优化：使用细粒度 selector
+  const gameState = useGameStore(s => s.gameState);
+  const player = useGameStore(s => s.player);
 
   if (!gameState?.isGameOver) return null;
 
+  // 本地样式 - 字体粗细/字间距与全局 neonText 不同，保留本地
   const neonText = {
     fontFamily: '"Rajdhani", "Orbitron", "Courier New", monospace',
     fontWeight: 700,
@@ -159,3 +159,6 @@ export function GameOverModal({ onRestart, onBackToMenu }: GameOverModalProps) {
     </div>
   );
 }
+
+// 性能优化：memo 包装
+export const GameOverModal = memo(GameOverModalImpl);

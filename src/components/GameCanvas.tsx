@@ -10,17 +10,37 @@ export const GameCanvas = forwardRef<GameCanvasHandle>((_, ref) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const engineRef = useRef<GameEngine | null>(null);
-  const {
+  // 性能优化：使用细粒度 selector 订阅各 action（actions 在 zustand 中引用稳定）
+  const setGameState = useGameStore(s => s.setGameState);
+  const setPlayer = useGameStore(s => s.setPlayer);
+  const setInventory = useGameStore(s => s.setInventory);
+  const setSkills = useGameStore(s => s.setSkills);
+  const setEquipment = useGameStore(s => s.setEquipment);
+  const setEquipmentStorage = useGameStore(s => s.setEquipmentStorage);
+  const setBuffs = useGameStore(s => s.setBuffs);
+  const setActiveSkills = useGameStore(s => s.setActiveSkills);
+  const setTalentChoices = useGameStore(s => s.setTalentChoices);
+  const setWeather = useGameStore(s => s.setWeather);
+  const setShowTalentSelection = useGameStore(s => s.setShowTalentSelection);
+  const setCodexEntries = useGameStore(s => s.setCodexEntries);
+  const setAchievements = useGameStore(s => s.setAchievements);
+  const setUnlockedAchievement = useGameStore(s => s.setUnlockedAchievement);
+  const setGemInventory = useGameStore(s => s.setGemInventory);
+  const setEnhanceItemInventory = useGameStore(s => s.setEnhanceItemInventory);
+  const setEnchantItemInventory = useGameStore(s => s.setEnchantItemInventory);
+  const addRareDropNotification = useGameStore(s => s.addRareDropNotification);
+  const setMails = useGameStore(s => s.setMails);
+
+  // 将所有 action 收集到一个稳定引用中（zustand 的 actions 引用稳定）
+  const actionsRef = useRef({
     setGameState, setPlayer, setInventory, setSkills,
     setEquipment, setEquipmentStorage, setBuffs,
     setActiveSkills, setTalentChoices, setWeather,
-    setShowTalentSelection,
-    setCodexEntries, setAchievements, setUnlockedAchievement,
-    setGemInventory,
-    setEnhanceItemInventory,
-    setEnchantItemInventory,
-    addRareDropNotification
-  } = useGameStore();
+    setShowTalentSelection, setCodexEntries, setAchievements,
+    setUnlockedAchievement, setGemInventory,
+    setEnhanceItemInventory, setEnchantItemInventory,
+    addRareDropNotification, setMails,
+  });
 
   useImperativeHandle(ref, () => ({
     get engine() {
@@ -42,83 +62,89 @@ export const GameCanvas = forwardRef<GameCanvasHandle>((_, ref) => {
 
     const engine = new GameEngine(canvas);
     engineRef.current = engine;
+    const A = actionsRef.current;
 
     engine.onStateChange = (state, player) => {
-      setGameState({ ...state }, { ...player });
+      A.setGameState({ ...state }, { ...player });
     };
 
     engine.onPlayerChange = (player) => {
-      setPlayer({ ...player });
+      A.setPlayer({ ...player });
     };
 
     engine.onInventoryChange = (inventory) => {
-      setInventory([...inventory]);
+      A.setInventory([...inventory]);
     };
 
     engine.onGemInventoryChange = (gems) => {
-      setGemInventory([...gems]);
+      A.setGemInventory([...gems]);
     };
 
     engine.onEnhanceItemInventoryChange = (items) => {
-      setEnhanceItemInventory([...items]);
+      A.setEnhanceItemInventory([...items]);
     };
 
     engine.onEnchantItemInventoryChange = (items) => {
-      setEnchantItemInventory([...items]);
+      A.setEnchantItemInventory([...items]);
     };
 
     engine.onSkillsChange = (skills) => {
-      setSkills([...skills]);
+      A.setSkills([...skills]);
     };
 
     engine.onEquipmentChange = (equipment) => {
-      setEquipment([...equipment]);
+      A.setEquipment([...equipment]);
     };
 
     engine.onEquipmentStorageChange = (storage) => {
-      setEquipmentStorage([...storage]);
+      A.setEquipmentStorage([...storage]);
     };
 
     engine.onBuffsChange = (buffs) => {
-      setBuffs([...buffs]);
+      A.setBuffs([...buffs]);
     };
 
     engine.onTalentSelection = (choices) => {
-      setTalentChoices([...choices]);
-      setShowTalentSelection(true);
+      A.setTalentChoices([...choices]);
+      A.setShowTalentSelection(true);
     };
 
     engine.onWeatherChange = (weather) => {
-      setWeather({ ...weather });
+      A.setWeather({ ...weather });
     };
 
     engine.onCodexChange = (entries) => {
-      setCodexEntries([...entries]);
+      A.setCodexEntries([...entries]);
     };
 
     engine.onAchievementsChange = (achievements) => {
-      setAchievements([...achievements]);
+      A.setAchievements([...achievements]);
     };
 
     engine.onAchievementUnlock = (achievement) => {
-      setUnlockedAchievement({ ...achievement });
+      A.setUnlockedAchievement({ ...achievement });
     };
 
     engine.onRareDrop = (info) => {
-      addRareDropNotification(info);
+      A.addRareDropNotification(info);
     };
 
-    setInventory([...engine.inventory]);
-    setSkills([...engine.skills]);
-    setEquipment([...engine.equipment]);
-    setEquipmentStorage([...engine.equipmentStorage]);
-    setGemInventory([...engine.gemInventory]);
-    setEnhanceItemInventory([...engine.enhanceItemInventory]);
-    setEnchantItemInventory([...engine.enchantItemInventory]);
-    setActiveSkills([...engine.getActiveSkills()]);
-    setWeather({ ...engine.getWeather() });
-    setCodexEntries([...engine.getCodexEntries()]);
-    setAchievements([...engine.getAchievements()]);
+    engine.onMailChange = (mails) => {
+      A.setMails([...mails]);
+    };
+
+    A.setInventory([...engine.inventory]);
+    A.setSkills([...engine.skills]);
+    A.setEquipment([...engine.equipment]);
+    A.setEquipmentStorage([...engine.equipmentStorage]);
+    A.setGemInventory([...engine.gemInventory]);
+    A.setEnhanceItemInventory([...engine.enhanceItemInventory]);
+    A.setEnchantItemInventory([...engine.enchantItemInventory]);
+    A.setActiveSkills([...engine.getActiveSkills()]);
+    A.setWeather({ ...engine.getWeather() });
+    A.setCodexEntries([...engine.getCodexEntries()]);
+    A.setAchievements([...engine.getAchievements()]);
+    A.setMails([...engine.getMails()]);
 
     engine.start();
 
@@ -159,15 +185,7 @@ export const GameCanvas = forwardRef<GameCanvasHandle>((_, ref) => {
       window.removeEventListener('keydown', handleKeyDown);
       engine.stop();
     };
-  }, [setGameState, setPlayer, setInventory, setSkills,
-      setEquipment, setEquipmentStorage, setBuffs,
-      setActiveSkills, setTalentChoices, setWeather,
-      setShowTalentSelection,
-      setCodexEntries, setAchievements, setUnlockedAchievement,
-      setGemInventory,
-      setEnhanceItemInventory,
-      setEnchantItemInventory,
-      addRareDropNotification]);
+  }, []);
 
   return (
     <div

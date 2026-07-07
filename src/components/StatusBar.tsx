@@ -1,6 +1,8 @@
 import { useState, useEffect, useRef } from 'react';
 import { useGameStore } from '../store/gameStore';
 import { getItemDef, getPotionEffectText } from '../game/data/equipment';
+import { neonCyan, neonPurple, neonPink, neonYellow } from '../theme/colors';
+import { memo } from 'react';
 
 interface StatusBarProps {
   onOpenShop?: () => void;
@@ -13,8 +15,10 @@ interface StatusBarProps {
   };
 }
 
-export function StatusBar({ onOpenShop, engineRef }: StatusBarProps) {
-  const { gameState, player } = useGameStore();
+function StatusBarImpl({ onOpenShop, engineRef }: StatusBarProps) {
+  // 性能优化：使用细粒度 selector 订阅，避免任意 state 变化触发重渲染
+  const gameState = useGameStore(s => s.gameState);
+  const player = useGameStore(s => s.player);
   const [showStats, setShowStats] = useState(false);
   const [highScore, setHighScore] = useState(0);
   const [itemCooldowns, setItemCooldowns] = useState<{ key: string; remaining: number; duration: number; icon: string; name: string; itemId: string }[]>([]);
@@ -139,10 +143,7 @@ export function StatusBar({ onOpenShop, engineRef }: StatusBarProps) {
     boxShadow: '0 0 10px rgba(176, 38, 255, 0.1), inset 0 1px 0 rgba(255,255,255,0.05)',
   };
 
-  const neonCyan = '#00F5D4';
-  const neonPurple = '#B026FF';
-  const neonPink = '#FF0080';
-  const neonYellow = '#FFE600';
+  // 顶部属性条使用的颜色已移至 theme/colors 顶部 import
 
   return (
     <div className="absolute top-0 left-0 right-0 p-2 z-10 pointer-events-none select-none">
@@ -502,12 +503,7 @@ export function StatusBar({ onOpenShop, engineRef }: StatusBarProps) {
                 >
                   点击空白关闭
                 </div>
-                <style>{`
-                  @keyframes potionInfoIn {
-                    0% { opacity: 0; transform: translateY(-4px); }
-                    100% { opacity: 1; transform: translateY(0); }
-                  }
-                `}</style>
+                {/* keyframes 已提取至 index.css */}
               </div>
             )}
           </div>
@@ -641,3 +637,6 @@ function StatRow({ label, value, color }: { label: string; value: string; color:
     </>
   );
 }
+
+// 性能优化：使用 React.memo 包装，避免 props 引用变化时不必要的重渲染
+export const StatusBar = memo(StatusBarImpl);

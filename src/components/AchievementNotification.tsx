@@ -1,9 +1,11 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, memo } from 'react';
 import { useGameStore } from '../store/gameStore';
 import type { Achievement } from '../game/types/game';
 
-export function AchievementNotification() {
-  const { unlockedAchievement, setUnlockedAchievement } = useGameStore();
+function AchievementNotificationImpl() {
+  // 性能优化：使用细粒度 selector
+  const unlockedAchievement = useGameStore(s => s.unlockedAchievement);
+  const setUnlockedAchievement = useGameStore(s => s.setUnlockedAchievement);
   const [queue, setQueue] = useState<Achievement[]>([]);
   const [currentIndex, setCurrentIndex] = useState(0);
 
@@ -94,3 +96,6 @@ export function AchievementNotification() {
     </div>
   );
 }
+
+// 性能优化：memo 包装
+export const AchievementNotification = memo(AchievementNotificationImpl);

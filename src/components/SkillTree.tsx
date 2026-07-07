@@ -1,7 +1,8 @@
 import { useGameStore } from '../store/gameStore';
 import { SKILLS, SKILL_TREE_LAYERS, FX_SKILL_TREE_LAYERS, CLONE_SKILL_TREE_LAYERS } from '../game/data/equipment';
 import type { Skill } from '../game/types/game';
-import { useMemo, useState } from 'react';
+import { useMemo, useState, memo } from 'react';
+import { neonCyan, neonPurple, neonPink, neonYellow } from '../theme/colors';
 
 interface GameEngineRef {
   current: {
@@ -16,10 +17,7 @@ interface SkillTreeProps {
   engineRef: GameEngineRef;
 }
 
-const neonCyan = '#00F5D4';
-const neonPurple = '#B026FF';
-const neonPink = '#FF0080';
-const neonYellow = '#FFE600';
+// neonCyan/neonPurple/neonPink/neonYellow 已移至 theme/colors（共享版本）
 
 const cardStyle = {
   background: 'rgba(19, 16, 37, 0.8)',
@@ -29,8 +27,10 @@ const cardStyle = {
   boxShadow: '0 0 20px rgba(176, 38, 255, 0.1), inset 0 1px 0 rgba(255,255,255,0.05)',
 };
 
-export function SkillTree({ engineRef }: SkillTreeProps) {
-  const { skills, player } = useGameStore();
+function SkillTreeImpl({ engineRef }: SkillTreeProps) {
+  // 性能优化：使用细粒度 selector
+  const skills = useGameStore(s => s.skills);
+  const player = useGameStore(s => s.player);
   const [selectedSkillId, setSelectedSkillId] = useState<string | null>(null);
   const [showResetConfirm, setShowResetConfirm] = useState(false);
 
@@ -606,3 +606,6 @@ export function SkillTree({ engineRef }: SkillTreeProps) {
     </div>
   );
 }
+
+// 性能优化：memo 包装
+export const SkillTree = memo(SkillTreeImpl);

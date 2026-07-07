@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { Player, GameState, ItemStack, Skill, Equipment, Buff, Talent, ActiveSkill, WeatherState, CodexEntry, Achievement } from '../game/types/game';
+import type { Player, GameState, ItemStack, Skill, Equipment, Buff, Talent, ActiveSkill, WeatherState, CodexEntry, Achievement, Mail } from '../game/types/game';
 
 interface GameStore {
   gameState: GameState | null;
@@ -26,6 +26,8 @@ interface GameStore {
   potionHotbar: (ItemStack | null)[];
   // 高品质掉落气泡通知（自动过期）
   rareDropNotifications: { id: number; rarity: string; name: string; icon: string; kind: 'equipment' | 'item' }[];
+  // 邮件系统
+  mails: Mail[];
 
   setGameState: (state: GameState, player: Player) => void;
   setPlayer: (player: Player) => void;
@@ -47,6 +49,7 @@ interface GameStore {
   setPotionHotbar: (hotbar: (ItemStack | null)[]) => void;
   addRareDropNotification: (info: { id: number; rarity: string; name: string; icon: string; kind: 'equipment' | 'item' }) => void;
   removeRareDropNotification: (id: number) => void;
+  setMails: (mails: Mail[]) => void;
 }
 
 export const useGameStore = create<GameStore>((set) => ({
@@ -69,6 +72,7 @@ export const useGameStore = create<GameStore>((set) => ({
   unlockedAchievement: null,
   potionHotbar: [null, null, null, null, null, null, null, null],
   rareDropNotifications: [],
+  mails: [],
   
   setGameState: (gameState, player) => set({ gameState, player }),
   setPlayer: (player) => set({ player }),
@@ -94,4 +98,5 @@ export const useGameStore = create<GameStore>((set) => ({
   removeRareDropNotification: (id) => set((state) => ({
     rareDropNotifications: state.rareDropNotifications.filter(n => n.id !== id),
   })),
+  setMails: (mails) => set({ mails }),
 }));

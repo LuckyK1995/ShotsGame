@@ -255,6 +255,7 @@ const DebugPanel: React.FC<DebugPanelProps> = ({ engineRef }) => {
     engineRef?.current?.syncEquipmentState(newEquipped, newStorage);
   };
 
+  // 调试面板内使用与全局主题不同的颜色（仅限调试用途）
   const neonRed = '#FF3B3B';
   const neonYellow = '#FFE600';
   const neonCyan = '#00F5D4';

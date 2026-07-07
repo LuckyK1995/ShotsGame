@@ -4,30 +4,16 @@ import { EquipmentIcon } from './EquipmentIcon';
 import { EnchantItemIcon } from './EnchantItemIcon';
 import {
   ENCHANT_ITEMS,
-  ENCHANT_ITEM_ORDER,
   ENCHANT_STAT_INFO,
-  ENCHANT_STAT_ORDER,
-  ENCHANT_RARITY_LABELS,
-  RARITY_PERCENT,
-  getEnchantItemDef,
   getUpgradeEnchantId,
   ENCHANT_SYNTH_COST,
 } from '../game/data/enchantItems';
 import type { EnchantItemId, EnchantStat } from '../game/data/enchantItems';
 import { RARITY_COLORS } from '../game/data/equipment';
+import { neonCyan, neonPurple, neonPink, neonYellow, neonGreen, neonText } from '../theme/colors';
+import { hexToRgba } from '../utils/styles';
 
-const neonCyan = '#00F5D4';
-const neonPurple = '#B026FF';
-const neonPink = '#FF0080';
-const neonYellow = '#FFE600';
-const neonGreen = '#00FF9D';
-
-function hexToRgba(hex: string, alpha: number): string {
-  const r = parseInt(hex.slice(1, 3), 16);
-  const g = parseInt(hex.slice(3, 5), 16);
-  const b = parseInt(hex.slice(5, 7), 16);
-  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
-}
+// hexToRgba 已移至 utils/styles.ts（共享版本）
 
 const cardStyle = {
   background: 'rgba(19, 16, 37, 0.95)',
@@ -35,12 +21,6 @@ const cardStyle = {
   border: '1px solid rgba(176, 38, 255, 0.35)',
   borderRadius: '12px',
   boxShadow: '0 0 24px rgba(176, 38, 255, 0.2), inset 0 1px 0 rgba(255,255,255,0.05)',
-};
-
-const neonText: React.CSSProperties = {
-  fontFamily: '"Rajdhani", "Orbitron", "Courier New", monospace',
-  fontWeight: 600,
-  letterSpacing: '0.5px',
 };
 
 interface GameEngineRef {
@@ -88,22 +68,17 @@ export function EnchantModal({ equipmentId, source, onClose, engineRef }: Enchan
 
   const currentEnchant = equipment.enchantment;
 
-  // 按属性分组：每种属性下 6 个品质的库存
-  const groupedItems = useMemo(() => {
-    return ENCHANT_STAT_ORDER.map(stat => {
-      const stacks = ENCHANT_ITEM_ORDER
-        .filter(id => {
-          const def = ENCHANT_ITEMS[id];
-          return def.stat === stat;
-        })
-        .map(id => {
-          const def = ENCHANT_ITEMS[id];
-          const stack = enchantItemInventory.find(s => s.itemId === id);
-          return { def, count: stack?.count ?? 0 };
-        })
-        .filter(x => x.count > 0);
-      return { stat, stacks };
-    }).filter(g => g.stacks.length > 0);
+  // 附魔书列表：按仓库中 enchantItemInventory 的顺序显示，仅显示持有数量>0 的
+  const flatItems = useMemo(() => {
+    const list: { def: NonNullable<typeof ENCHANT_ITEMS[EnchantItemId]>; count: number }[] = [];
+    for (const stack of enchantItemInventory) {
+      const id = stack.itemId as EnchantItemId;
+      const def = ENCHANT_ITEMS[id];
+      if (!def) continue;
+      if (stack.count <= 0) continue;
+      list.push({ def, count: stack.count });
+    }
+    return list;
   }, [enchantItemInventory]);
 
   // 选中道具
@@ -258,32 +233,20 @@ export function EnchantModal({ equipmentId, source, onClose, engineRef }: Enchan
               </div>
             </div>
 
-            {/* 装饰框 - 与镶嵌/强化界面位置一致 */}
+            {/* 带文字的装饰框 - 切合附魔界面紫红色调 */}
             <div
               style={{
-                height: '16px',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                gap: '4px',
-                padding: '0 6px',
-                background: `linear-gradient(90deg, ${hexToRgba(neonPurple, 0.05)} 0%, ${hexToRgba(neonCyan, 0.12)} 50%, ${hexToRgba(neonPurple, 0.05)} 100%)`,
+                ...neonText,
+                fontSize: '7px',
+                color: neonPurple,
+                textAlign: 'center',
+                padding: '1px 0',
+                background: hexToRgba(neonPurple, 0.1),
                 borderRadius: '3px',
-                border: `1px solid ${hexToRgba(neonPurple, 0.3)}`,
-                boxShadow: `inset 0 0 8px ${hexToRgba(neonPurple, 0.08)}`,
+                border: `1px solid ${hexToRgba(neonPurple, 0.35)}`,
               }}
             >
-              <span style={{ width: '3px', height: '3px', borderRadius: '50%', background: neonPurple, boxShadow: `0 0 4px ${neonPurple}` }} />
-              <span style={{ flex: 1, height: '1px', background: `linear-gradient(90deg, ${hexToRgba(neonPurple, 0.4)}, ${hexToRgba(neonCyan, 0.4)}, ${hexToRgba(neonPurple, 0.4)})` }} />
-              <span style={{
-                width: '4px',
-                height: '4px',
-                background: neonCyan,
-                transform: 'rotate(45deg)',
-                boxShadow: `0 0 4px ${hexToRgba(neonCyan, 0.6)}`,
-              }} />
-              <span style={{ flex: 1, height: '1px', background: `linear-gradient(90deg, ${hexToRgba(neonPurple, 0.4)}, ${hexToRgba(neonCyan, 0.4)}, ${hexToRgba(neonPurple, 0.4)})` }} />
-              <span style={{ width: '3px', height: '3px', borderRadius: '50%', background: neonPurple, boxShadow: `0 0 4px ${neonPurple}` }} />
+              两本相同附魔书合成下一品质
             </div>
 
             {/* 选中附魔书信息 */}
@@ -332,7 +295,7 @@ export function EnchantModal({ equipmentId, source, onClose, engineRef }: Enchan
             }}
           />
 
-          {/* 右侧：附魔书列表（按属性分组） */}
+          {/* 右侧：附魔书列表（按仓库顺序显示） */}
           <div className="flex flex-col flex-1 min-w-0" style={{ minWidth: 0 }}>
             <div
               style={{
@@ -347,72 +310,63 @@ export function EnchantModal({ equipmentId, source, onClose, engineRef }: Enchan
               附魔书
             </div>
             <div
-              className="flex flex-col gap-1.5 overflow-y-auto"
+              className="flex flex-col gap-1 overflow-y-auto"
               style={{ flex: 1, minHeight: 0, paddingRight: '2px' }}
             >
-              {groupedItems.length === 0 && (
+              {flatItems.length === 0 && (
                 <div style={{ ...neonText, fontSize: '7px', color: '#5A5A7A', textAlign: 'center', padding: '8px 0' }}>
                   暂无附魔书
                 </div>
               )}
-              {groupedItems.map(group => (
-                <div key={group.stat} className="flex flex-col gap-0.5">
-                  {/* 属性标题 */}
-                  <div style={{ ...neonText, fontSize: '6.5px', color: ENCHANT_STAT_INFO[group.stat].color, fontWeight: 700, letterSpacing: '0.5px' }}>
-                    {ENCHANT_STAT_INFO[group.stat].name}
-                  </div>
-                  {/* 该属性下各品质附魔书 */}
-                  {group.stacks.map(({ def, count }) => {
-                    const isSelected = selectedItemId === def.id;
-                    const itemRarityColor = RARITY_COLORS[def.rarity] || '#9A9A9A';
-                    return (
-                      <button
-                        key={def.id}
-                        onClick={() => count > 0 && setSelectedItemId(def.id)}
-                        style={{
-                          display: 'flex',
-                          alignItems: 'center',
-                          gap: '4px',
-                          padding: '2px 4px',
-                          background: isSelected
-                            ? `linear-gradient(90deg, ${hexToRgba(itemRarityColor, 0.25)} 0%, ${hexToRgba(itemRarityColor, 0.08)} 100%)`
-                            : 'rgba(19, 16, 37, 0.6)',
-                          border: `1px solid ${isSelected ? itemRarityColor : 'rgba(100, 100, 130, 0.25)'}`,
-                          borderRadius: '4px',
-                          cursor: count > 0 ? 'pointer' : 'not-allowed',
-                          width: '100%',
-                          textAlign: 'left',
-                          opacity: count > 0 ? 1 : 0.5,
-                          boxShadow: isSelected ? `0 0 4px ${hexToRgba(itemRarityColor, 0.3)}` : 'none',
-                        }}
-                        title={def.description}
-                      >
-                        <div style={{ width: '14px', height: '14px', flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                          <EnchantItemIcon itemId={def.id} size={14} />
-                        </div>
-                        <span
-                          style={{
-                            ...neonText,
-                            fontSize: '6.5px',
-                            color: isSelected ? '#FFFFFF' : itemRarityColor,
-                            fontWeight: 700,
-                            flex: 1,
-                            minWidth: 0,
-                            overflow: 'hidden',
-                            textOverflow: 'ellipsis',
-                            whiteSpace: 'nowrap',
-                          }}
-                        >
-                          {ENCHANT_RARITY_LABELS[def.rarity]}
-                        </span>
-                        <span style={{ ...neonText, fontSize: '6.5px', color: neonYellow, fontWeight: 700, flexShrink: 0 }}>
-                          ×{count}
-                        </span>
-                      </button>
-                    );
-                  })}
-                </div>
-              ))}
+              {flatItems.map(({ def, count }) => {
+                const isSelected = selectedItemId === def.id;
+                const itemRarityColor = RARITY_COLORS[def.rarity] || '#9A9A9A';
+                return (
+                  <button
+                    key={def.id}
+                    onClick={() => count > 0 && setSelectedItemId(def.id)}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '4px',
+                      padding: '2px 4px',
+                      background: isSelected
+                        ? `linear-gradient(90deg, ${hexToRgba(itemRarityColor, 0.25)} 0%, ${hexToRgba(itemRarityColor, 0.08)} 100%)`
+                        : 'rgba(19, 16, 37, 0.6)',
+                      border: `1px solid ${isSelected ? itemRarityColor : 'rgba(100, 100, 130, 0.25)'}`,
+                      borderRadius: '4px',
+                      cursor: count > 0 ? 'pointer' : 'not-allowed',
+                      width: '100%',
+                      textAlign: 'left',
+                      opacity: count > 0 ? 1 : 0.5,
+                      boxShadow: isSelected ? `0 0 4px ${hexToRgba(itemRarityColor, 0.3)}` : 'none',
+                    }}
+                    title={def.description}
+                  >
+                    <div style={{ width: '14px', height: '14px', flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                      <EnchantItemIcon itemId={def.id} size={14} />
+                    </div>
+                    <span
+                      style={{
+                        ...neonText,
+                        fontSize: '6.5px',
+                        color: isSelected ? '#FFFFFF' : itemRarityColor,
+                        fontWeight: 700,
+                        flex: 1,
+                        minWidth: 0,
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                        whiteSpace: 'nowrap',
+                      }}
+                    >
+                      {def.name}
+                    </span>
+                    <span style={{ ...neonText, fontSize: '6.5px', color: neonYellow, fontWeight: 700, flexShrink: 0 }}>
+                      ×{count}
+                    </span>
+                  </button>
+                );
+              })}
             </div>
           </div>
         </div>
@@ -462,7 +416,7 @@ export function EnchantModal({ equipmentId, source, onClose, engineRef }: Enchan
               boxShadow: !canSynth ? 'none' : `0 0 6px ${hexToRgba(neonGreen, 0.4)}`,
             }}
           >
-            {isProcessing ? '合成中...' : `合成 ×${ENCHANT_SYNTH_COST}`}
+            {isProcessing ? '合成中...' : '合成'}
           </button>
         </div>
       </div>

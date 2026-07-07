@@ -1,4 +1,4 @@
-import { useState, useRef } from 'react';
+import { useState, useRef, useMemo, useCallback } from 'react';
 import { GameCanvas, type GameCanvasHandle } from './components/GameCanvas';
 import { StatusBar } from './components/StatusBar';
 import { BossHealthBar } from './components/BossHealthBar';
@@ -15,6 +15,15 @@ import { AchievementNotification } from './components/AchievementNotification';
 import { GameOverModal } from './components/GameOverModal';
 import { EquipmentStatsModal } from './components/EquipmentStatsModal';
 import { QuickBars } from './components/QuickBars';
+import { MailPanel } from './components/MailPanel';
+import { RestartConfirmModal } from './components/RestartConfirmModal';
+import { MainMenu } from './components/MainMenu';
+import { CharacterPanel } from './components/CharacterPanel';
+import {
+  PixelButton,
+  PixelCharIcon, PixelSkillIcon, PixelAchieveIcon, PixelSocialIcon,
+  PixelMailIcon, PixelBagIcon, PixelRestartIcon, PixelHomeIcon,
+} from './components/PixelButton';
 
 // 设计基准宽度（用于决定整体容器的最大宽度）
 const DESIGN_WIDTH = 430;
@@ -23,23 +32,27 @@ const BOTTOM_HEIGHT = 190;
 const FUNC_PANEL_HEIGHT = 110; // 功能区（+10px，原100）
 const BTN_PANEL_HEIGHT = 50;   // 按钮区
 const BOTTOM_FOOTER_HEIGHT = 30; // 最底部占位框（抬高整体）
-// 注：战场固定 300px 高度由 GameEngine 内部 ARENA_HEIGHT 控制，canvas 整体 flex-1
-// 上方 0~groundY 绘制背景图（天空/霓虹城市/星星），下方 300px 是战场
-// 背包浮层固定高度
+// 浮层固定高度
 const BAG_PANEL_HEIGHT = 266;
-// 技能浮层固定高度
 const SKILL_PANEL_HEIGHT = 600;
-// 图鉴/成就浮层固定高度
 const CODEX_PANEL_HEIGHT = 350;
+const MAIL_PANEL_HEIGHT = 266;
+const CHAR_PANEL_HEIGHT = 266;
+
+type View = 'menu' | 'battle';
+// 单例浮层：仅允许打开一个
+type ActivePanel = 'character' | 'bag' | 'skill' | 'codex' | 'mail' | null;
+type BagTab = 'equipment' | 'inventory' | 'debug';
 
 function App() {
   const gameCanvasRef = useRef<GameCanvasHandle>(null);
-  const [activeTab, setActiveTab] = useState('equipment');
+  const [view, setView] = useState<View>('battle');
   const [shopOpen, setShopOpen] = useState(false);
   const [showEquipStats, setShowEquipStats] = useState(false);
-  const [bagOpen, setBagOpen] = useState(false);
-  const [skillOpen, setSkillOpen] = useState(false);
-  const [codexOpen, setCodexOpen] = useState(false);
+  const [activePanel, setActivePanel] = useState<ActivePanel>(null);
+  const [bagTab, setBagTab] = useState<BagTab>('equipment');
+  const [restartConfirm, setRestartConfirm] = useState(false);
+  const [socialToast, setSocialToast] = useState(false);
 
   // 背包页签：仅保留 装备/物品/调试
   const tabs = [
@@ -53,6 +66,102 @@ function App() {
       return gameCanvasRef.current?.engine || null;
     },
   };
+
+  // 切换浮层：点击当前已打开的按钮则关闭，否则切换到新浮层（自动关闭其他）
+  const togglePanel = useCallback((panel: Exclude<ActivePanel, null>) => {
+    setActivePanel(prev => (prev === panel ? null : panel));
+  }, []);
+
+  // 关闭所有浮层（切到主界面前调用）
+  const closeAllPanels = useCallback(() => {
+    setActivePanel(null);
+    setRestartConfirm(false);
+    setShopOpen(false);
+    setShowEquipStats(false);
+  }, []);
+
+  const handleBackToMenu = useCallback(() => {
+    closeAllPanels();
+    engineRef.current?.saveGame();
+    setView('menu');
+  }, [closeAllPanels]);
+
+  const handleEnterStage = useCallback(() => {
+    setView('battle');
+  }, []);
+
+  // 社交按钮：临时提示
+  const handleSocial = useCallback(() => {
+    setSocialToast(true);
+    window.setTimeout(() => setSocialToast(false), 1500);
+  }, []);
+
+  // 底部按钮配置（单例互斥）- 性能优化：useMemo 缓存，避免每次 render 重建数组
+  const buttons = useMemo<Array<{
+    id: string;
+    label: string;
+    iconElement: React.ReactNode;
+    action: () => void;
+    active: boolean;
+    badge?: number;
+  }>>(() => [
+    {
+      id: 'character',
+      label: '人物',
+      iconElement: <PixelCharIcon />,
+      action: () => togglePanel('character'),
+      active: activePanel === 'character',
+    },
+    {
+      id: 'skill',
+      label: '技能',
+      iconElement: <PixelSkillIcon />,
+      action: () => togglePanel('skill'),
+      active: activePanel === 'skill',
+    },
+    {
+      id: 'achievement',
+      label: '成就',
+      iconElement: <PixelAchieveIcon />,
+      action: () => togglePanel('codex'),
+      active: activePanel === 'codex',
+    },
+    {
+      id: 'social',
+      label: '社交',
+      iconElement: <PixelSocialIcon />,
+      action: handleSocial,
+      active: false,
+    },
+    {
+      id: 'mail',
+      label: '邮件',
+      iconElement: <PixelMailIcon />,
+      action: () => togglePanel('mail'),
+      active: activePanel === 'mail',
+    },
+    {
+      id: 'bag',
+      label: '背包',
+      iconElement: <PixelBagIcon />,
+      action: () => togglePanel('bag'),
+      active: activePanel === 'bag',
+    },
+    {
+      id: 'restart',
+      label: '重开',
+      iconElement: <PixelRestartIcon />,
+      action: () => setRestartConfirm(true),
+      active: false,
+    },
+    {
+      id: 'home',
+      label: '主界面',
+      iconElement: <PixelHomeIcon />,
+      action: handleBackToMenu,
+      active: false,
+    },
+  ], [activePanel, togglePanel, handleSocial, handleBackToMenu]);
 
   return (
     <div
@@ -69,9 +178,7 @@ function App() {
           boxShadow: '0 0 40px rgba(176, 38, 255, 0.15), 0 0 80px rgba(0, 245, 212, 0.08)',
         }}
       >
-        {/* 游戏区域：上方背景图区域动态高度 + 下方战场固定 300px
-            canvas 整体 flex-1，GameEngine 内部 groundY = height - 300，
-            上方 0~groundY 绘制天空/霓虹城市/星星等背景图，下方 300px 是战场 */}
+        {/* 游戏区域：上方背景图区域动态高度 + 下方战场固定 300px */}
         <div
           className="relative flex-1 min-h-0 overflow-hidden"
           style={{ width: '100%' }}
@@ -93,7 +200,7 @@ function App() {
           {showEquipStats && <EquipmentStatsModal onClose={() => setShowEquipStats(false)} />}
         </div>
 
-        {/* 底部控制区：固定 150px = 100px 功能区 + 50px 按钮区 */}
+        {/* 底部控制区：固定 190px = 110 功能区 + 50 按钮区 + 30 占位框 */}
         <div
           className="flex-shrink-0 flex flex-col"
           style={{
@@ -103,7 +210,7 @@ function App() {
             boxShadow: 'inset 0 1px 0 rgba(0, 245, 212, 0.1)',
           }}
         >
-          {/* 功能区：100px — 物品快捷栏(2行4列) + 技能快捷栏(2行4列) */}
+          {/* 功能区：110px */}
           <div
             style={{
               height: FUNC_PANEL_HEIGHT,
@@ -112,60 +219,27 @@ function App() {
           >
             <QuickBars engineRef={engineRef as any} />
           </div>
-          {/* 按钮区：50px，按顺序排列8个按钮 */}
+          {/* 按钮区：50px，圆形立体按钮，靠右对齐，左右边距-10px */}
           <div
-            className="flex items-center justify-between gap-1"
+            className="flex items-end justify-end gap-1"
             style={{
               height: BTN_PANEL_HEIGHT,
-              padding: '0 8px',
+              padding: '2px 0px 0px',
             }}
           >
-            {([
-              { label: '人物', action: () => {}, active: false },
-              { label: '技能', action: () => setSkillOpen((v) => !v), active: skillOpen },
-              { label: '成就', action: () => setCodexOpen((v) => !v), active: codexOpen },
-              { label: '社交', action: () => {}, active: false },
-              { label: '邮件', action: () => {}, active: false },
-              { label: '背包', action: () => setBagOpen((v) => !v), active: bagOpen },
-              { label: '重开', action: () => engineRef.current?.restartCurrentWave(), active: false },
-              { label: '主界面', action: () => {}, active: false },
-            ] as const).map((btn) => {
-              const active = btn.active;
-              return (
-                <button
-                  key={btn.label}
-                  onClick={btn.action}
-                  style={{
-                    flex: '1 1 0',
-                    minWidth: '0',
-                    height: '34px',
-                    padding: '0 4px',
-                    fontFamily: '"Rajdhani", "Orbitron", "Courier New", monospace',
-                    fontSize: '11px',
-                    fontWeight: 700,
-                    letterSpacing: '0.5px',
-                    color: active ? '#0A0814' : '#00F5D4',
-                    background: active
-                      ? 'linear-gradient(180deg, #00F5D4 0%, #4FACFE 100%)'
-                      : 'rgba(19, 16, 37, 0.85)',
-                    border: `1px solid ${active ? '#00F5D4' : 'rgba(0, 245, 212, 0.4)'}`,
-                    borderRadius: '8px',
-                    cursor: 'pointer',
-                    boxShadow: active
-                      ? `0 0 12px rgba(0, 245, 212, 0.55)`
-                      : `0 0 6px rgba(0, 245, 212, 0.18), inset 0 1px 0 rgba(255,255,255,0.05)`,
-                    textShadow: active ? 'none' : '0 0 6px rgba(0, 245, 212, 0.5)',
-                    whiteSpace: 'nowrap',
-                    overflow: 'hidden',
-                  }}
-                >
-                  {btn.label}
-                </button>
-              );
-            })}
+            {buttons.map((btn) => (
+              <PixelButton
+                key={btn.id}
+                iconElement={btn.iconElement}
+                label={btn.label}
+                active={btn.active}
+                onClick={btn.action}
+                badge={btn.badge}
+              />
+            ))}
           </div>
 
-          {/* 最底部占位框：30px，抬高功能区与按钮区，水平垂直居中显示︿ */}
+          {/* 最底部占位框：30px */}
           <div
             className="flex items-center justify-center"
             style={{
@@ -181,9 +255,35 @@ function App() {
           </div>
         </div>
 
-        {/* 背包浮层：固定高度 266px，绝对定位 bottom=按钮区+底部占位框高度，
-            打开时覆盖游戏区下方+整个功能区，只露出最下方按钮区一排 */}
-        {bagOpen && (
+        {/* 人物面板浮层：固定高度 266px */}
+        {activePanel === 'character' && (
+          <div
+            className="absolute left-0 right-0 z-40"
+            style={{
+              bottom: BTN_PANEL_HEIGHT + BOTTOM_FOOTER_HEIGHT,
+              height: CHAR_PANEL_HEIGHT,
+              background: 'rgba(10, 8, 20, 0.35)',
+            }}
+            onClick={() => setActivePanel(null)}
+          >
+            <div
+              className="absolute inset-0"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <TabPanel
+                tabs={[{ id: 'character', label: '人物', icon: '\uD83E\uDD77' }]}
+                activeTab="character"
+                onTabChange={() => {}}
+                onClose={() => setActivePanel(null)}
+              >
+                <CharacterPanel engineRef={engineRef as any} />
+              </TabPanel>
+            </div>
+          </div>
+        )}
+
+        {/* 背包浮层：固定高度 266px */}
+        {activePanel === 'bag' && (
           <div
             className="absolute left-0 right-0 z-40"
             style={{
@@ -191,7 +291,7 @@ function App() {
               height: BAG_PANEL_HEIGHT,
               background: 'rgba(10, 8, 20, 0.35)',
             }}
-            onClick={() => setBagOpen(false)}
+            onClick={() => setActivePanel(null)}
           >
             <div
               className="absolute inset-0"
@@ -199,17 +299,17 @@ function App() {
             >
               <TabPanel
                 tabs={tabs}
-                activeTab={activeTab}
-                onTabChange={setActiveTab}
-                onClose={() => setBagOpen(false)}
+                activeTab={bagTab}
+                onTabChange={(t) => setBagTab(t as BagTab)}
+                onClose={() => setActivePanel(null)}
               >
-                {activeTab === 'equipment' && (
-                  <EquipmentPanel onTabChange={setActiveTab} activeTab={activeTab} engineRef={engineRef} onShowStats={() => setShowEquipStats(true)} />
+                {bagTab === 'equipment' && (
+                  <EquipmentPanel onTabChange={(t) => setBagTab(t as BagTab)} activeTab={bagTab as 'equipment' | 'inventory'} engineRef={engineRef} onShowStats={() => setShowEquipStats(true)} />
                 )}
-                {activeTab === 'inventory' && (
+                {bagTab === 'inventory' && (
                   <InventoryPanel engineRef={engineRef} />
                 )}
-                {activeTab === 'debug' && (
+                {bagTab === 'debug' && (
                   <DebugPanel engineRef={engineRef} />
                 )}
               </TabPanel>
@@ -217,8 +317,8 @@ function App() {
           </div>
         )}
 
-        {/* 技能浮层：固定高度 600px，绝对定位底部对齐按钮区顶部 */}
-        {skillOpen && (
+        {/* 技能浮层：固定高度 600px */}
+        {activePanel === 'skill' && (
           <div
             className="absolute left-0 right-0 z-40"
             style={{
@@ -226,7 +326,7 @@ function App() {
               height: SKILL_PANEL_HEIGHT,
               background: 'rgba(10, 8, 20, 0.35)',
             }}
-            onClick={() => setSkillOpen(false)}
+            onClick={() => setActivePanel(null)}
           >
             <div
               className="absolute inset-0"
@@ -236,7 +336,7 @@ function App() {
                 tabs={[{ id: 'skills', label: '技能', icon: '\u2728' }]}
                 activeTab="skills"
                 onTabChange={() => {}}
-                onClose={() => setSkillOpen(false)}
+                onClose={() => setActivePanel(null)}
               >
                 <SkillTree engineRef={engineRef} />
               </TabPanel>
@@ -244,8 +344,8 @@ function App() {
           </div>
         )}
 
-        {/* 成就/图鉴浮层：固定高度 350px，绝对定位底部对齐按钮区顶部 */}
-        {codexOpen && (
+        {/* 成就/图鉴浮层：固定高度 350px */}
+        {activePanel === 'codex' && (
           <div
             className="absolute left-0 right-0 z-40"
             style={{
@@ -253,7 +353,7 @@ function App() {
               height: CODEX_PANEL_HEIGHT,
               background: 'rgba(10, 8, 20, 0.35)',
             }}
-            onClick={() => setCodexOpen(false)}
+            onClick={() => setActivePanel(null)}
           >
             <div
               className="absolute inset-0"
@@ -263,7 +363,7 @@ function App() {
                 tabs={[{ id: 'codex', label: '图鉴', icon: '\uD83D\uDCD6' }]}
                 activeTab="codex"
                 onTabChange={() => {}}
-                onClose={() => setCodexOpen(false)}
+                onClose={() => setActivePanel(null)}
               >
                 <CodexPanel />
               </TabPanel>
@@ -271,15 +371,77 @@ function App() {
           </div>
         )}
 
-        {/* 游戏结束弹窗：覆盖整个容器（含底部面板），阻止物品栏操作 */}
+        {/* 邮件浮层：固定高度 266px */}
+        {activePanel === 'mail' && (
+          <div
+            className="absolute left-0 right-0 z-40"
+            style={{
+              bottom: BTN_PANEL_HEIGHT + BOTTOM_FOOTER_HEIGHT,
+              height: MAIL_PANEL_HEIGHT,
+              background: 'rgba(10, 8, 20, 0.35)',
+            }}
+            onClick={() => setActivePanel(null)}
+          >
+            <div
+              className="absolute inset-0"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <MailPanel
+                engineRef={engineRef as any}
+                onClose={() => setActivePanel(null)}
+              />
+            </div>
+          </div>
+        )}
+
+        {/* 重开确认弹窗 */}
+        {restartConfirm && (
+          <RestartConfirmModal
+            onConfirm={() => {
+              engineRef.current?.restartCurrentWave();
+              setRestartConfirm(false);
+            }}
+            onCancel={() => setRestartConfirm(false)}
+          />
+        )}
+
+        {/* 社交功能未开放提示 */}
+        {socialToast && (
+          <div
+            className="absolute left-1/2 z-[80]"
+            style={{
+              bottom: BTN_PANEL_HEIGHT + BOTTOM_FOOTER_HEIGHT + 10,
+              transform: 'translateX(-50%)',
+              fontFamily: '"Rajdhani", "Orbitron", monospace',
+              fontSize: '10px',
+              fontWeight: 700,
+              color: '#FFE600',
+              padding: '6px 14px',
+              background: 'rgba(10, 8, 20, 0.92)',
+              border: '1px solid rgba(255, 230, 0, 0.4)',
+              borderRadius: '6px',
+              boxShadow: '0 0 16px rgba(255, 230, 0, 0.3)',
+              textShadow: '0 0 6px rgba(255, 230, 0, 0.6)',
+              pointerEvents: 'none',
+              whiteSpace: 'nowrap',
+            }}
+          >
+            【社交】即将开放，敬请期待
+          </div>
+        )}
+
+        {/* 游戏结束弹窗 */}
         <GameOverModal
           onRestart={() => {
             engineRef.current?.restartCurrentWave();
           }}
-          onBackToMenu={() => {
-            // 主界面逻辑待实现
-          }}
+          onBackToMenu={handleBackToMenu}
         />
+
+        {/* 主界面：覆盖整个容器 */}
+        {view === 'menu' && (
+          <MainMenu onEnterStage={handleEnterStage} />
+        )}
       </div>
     </div>
   );

@@ -2,11 +2,8 @@ import { useState, useCallback, useMemo, useEffect, useRef } from 'react';
 import { useGameStore } from '../store/gameStore';
 import { ITEMS, RARITY_COLORS, RARITY_BG, RARITY_BG_DARK, RARITY_LABELS, getItemDef } from '../game/data/equipment';
 import type { ItemStack, ItemRarity, EquipRarity } from '../game/types/game';
-
-const neonCyan = '#00F5D4';
-const neonPurple = '#B026FF';
-const neonPink = '#FF0080';
-const neonYellow = '#FFE600';
+import { neonCyan, neonPurple, neonPink, neonYellow } from '../theme/colors';
+import { hexToRgba, itemSlotStyle, emptySlotStyle } from '../utils/styles';
 
 interface GameEngineRef {
   current: {
@@ -45,52 +42,7 @@ const raritySellMap: Record<string, number> = {
   mythic: 500,
 };
 
-export function hexToRgba(hex: string, alpha: number): string {
-  const r = parseInt(hex.slice(1, 3), 16);
-  const g = parseInt(hex.slice(3, 5), 16);
-  const b = parseInt(hex.slice(5, 7), 16);
-  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
-}
-
-export const itemSlotStyle = (rarity?: string) => {
-  const r = (rarity || 'common') as ItemRarity;
-  const baseColor = RARITY_COLORS[r] || RARITY_COLORS.common;
-  const borderAlpha: Record<string, number> = {
-    common: 0.3, advanced: 0.4, fine: 0.5,
-    legendary: 0.55, epic: 0.6, mythic: 0.65,
-  };
-  const glowBlur: Record<string, number> = {
-    common: 0, advanced: 6, fine: 8,
-    legendary: 10, epic: 12, mythic: 14,
-  };
-  const glowAlpha: Record<string, number> = {
-    common: 0, advanced: 0.2, fine: 0.25,
-    legendary: 0.3, epic: 0.35, mythic: 0.4,
-  };
-  const rarityGradient: Record<string, string> = {
-    common: 'radial-gradient(circle at 50% 45%, #2A2540 0%, #1E1A35 55%, #15122A 100%)',
-    advanced: 'radial-gradient(circle at 50% 45%, #253050 0%, #1A2540 55%, #101830 100%)',
-    fine: 'radial-gradient(circle at 50% 45%, #3A2855 0%, #2A1C45 55%, #1E1035 100%)',
-    legendary: 'radial-gradient(circle at 50% 40%, #8A4A2A 0%, #5A2A10 60%, #3A1A08 100%)',
-    epic: 'radial-gradient(circle at 50% 40%, #7A6A20 0%, #4D4010 60%, #2F2808 100%)',
-    mythic: 'radial-gradient(circle at 50% 40%, #8A2A3A 0%, #5A1A20 60%, #3A0A10 100%)',
-  };
-  const blur = glowBlur[r] || 0;
-  const glow = blur > 0 ? `0 0 ${blur}px ${hexToRgba(baseColor, glowAlpha[r] || 0)}` : 'none';
-  return {
-    background: rarityGradient[r] || 'rgba(19, 16, 37, 0.6)',
-    border: `2.5px solid ${hexToRgba(baseColor, borderAlpha[r] || 0.3)}`,
-    borderRadius: '8px',
-    boxShadow: glow,
-  };
-};
-
-export const emptySlotStyle = {
-  background: 'rgba(19, 16, 37, 0.2)',
-  border: '2.5px solid rgba(100, 100, 130, 0.15)',
-  borderRadius: '8px',
-  opacity: 0.6,
-};
+// itemSlotStyle/emptySlotStyle/hexToRgba 已移至 utils/styles.ts（共享版本）
 
 const cardStyle = {
   background: 'rgba(19, 16, 37, 0.8)',
@@ -126,6 +78,38 @@ export function InventoryPanel({ engineRef }: InventoryPanelProps) {
     } catch {}
   }, [sellQualities]);
 
+  // 物品锁定：lockMode 表示当前处于锁定模式；lockedItemIds 存储已锁定物品 itemId
+  const [lockMode, setLockMode] = useState(false);
+  const [lockToast, setLockToast] = useState<string | null>(null);
+  const [lockedItemIds, setLockedItemIds] = useState<Set<string>>(() => {
+    try {
+      const saved = localStorage.getItem('lockedItemIds');
+      if (saved) return new Set(JSON.parse(saved) as string[]);
+    } catch {}
+    return new Set<string>();
+  });
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('lockedItemIds', JSON.stringify(Array.from(lockedItemIds)));
+    } catch {}
+  }, [lockedItemIds]);
+
+  const toggleItemLock = useCallback((itemId: string) => {
+    setLockedItemIds(prev => {
+      const next = new Set(prev);
+      if (next.has(itemId)) next.delete(itemId);
+      else next.add(itemId);
+      return next;
+    });
+  }, []);
+
+  useEffect(() => {
+    if (!lockToast) return;
+    const id = setTimeout(() => setLockToast(null), 1200);
+    return () => clearTimeout(id);
+  }, [lockToast]);
+
   const prevCooldownsRef = useRef<string>('');
 
   useEffect(() => {
@@ -155,7 +139,10 @@ export function InventoryPanel({ engineRef }: InventoryPanelProps) {
     return () => clearInterval(interval);
   }, [engineRef]);
 
-  const displaySlots = 200;
+  // 按页签设置容量上限：消耗品100 / 材料50 / 任务材料30
+  const displaySlots = inventoryTab === 'consumable' ? 100
+    : inventoryTab === 'material' ? 50
+    : 30;
   // 按当前页签过滤物品（消耗=consumable，材料=material，任务材料=quest）
   // 注：当前 ITEMS 数据全部为 consumable，材料/任务材料页签为空，预留扩展
   const tabFilteredInventory = useMemo(() => {
@@ -240,6 +227,10 @@ export function InventoryPanel({ engineRef }: InventoryPanelProps) {
 
   const handleDropItem = () => {
     if (selectedItem && engineRef.current) {
+      if (lockedItemIds.has(selectedItem.stack.itemId)) {
+        setLockToast('该物品已锁定，无法丢弃');
+        return;
+      }
       engineRef.current.removeFromInventory(selectedItem.index);
       setSortedInventory(null);
       setSelectedItem(null);
@@ -247,14 +238,30 @@ export function InventoryPanel({ engineRef }: InventoryPanelProps) {
   };
 
   const handleSort = useCallback(() => {
-    const sorted = [...inventory].sort((a, b) => {
-      const ra = RARITY_ORDER[getItemDef(a.itemId)?.rarity || 'common'] || 0;
-      const rb = RARITY_ORDER[getItemDef(b.itemId)?.rarity || 'common'] || 0;
-      return sortDesc ? rb - ra : ra - rb;
-    });
-    setSortedInventory(sorted);
+    // 锁定的物品保持在原 index（基于 tabFilteredInventory），未锁定的排序后填入其余位置
+    const baseList = tabFilteredInventory;
+    const unlocked = baseList
+      .filter(s => !lockedItemIds.has(s.itemId))
+      .sort((a, b) => {
+        const ra = RARITY_ORDER[getItemDef(a.itemId)?.rarity || 'common'] || 0;
+        const rb = RARITY_ORDER[getItemDef(b.itemId)?.rarity || 'common'] || 0;
+        return sortDesc ? rb - ra : ra - rb;
+      });
+    const result: ItemStack[] = [];
+    let ui = 0;
+    for (let i = 0; i < baseList.length; i++) {
+      if (lockedItemIds.has(baseList[i].itemId)) {
+        result.push(baseList[i]);
+      } else if (ui < unlocked.length) {
+        result.push(unlocked[ui++]);
+      }
+    }
+    while (ui < unlocked.length) {
+      result.push(unlocked[ui++]);
+    }
+    setSortedInventory(result);
     setSortDesc(!sortDesc);
-  }, [inventory, sortDesc]);
+  }, [inventory, sortDesc, lockedItemIds, tabFilteredInventory]);
 
   const toggleSellQuality = useCallback((q: string) => {
     setSellQualities(prev => {
@@ -281,18 +288,62 @@ export function InventoryPanel({ engineRef }: InventoryPanelProps) {
   const handleBatchSell = useCallback(() => {
     if (!engineRef.current) return;
     const selected = Array.from(sellQualities);
-    const toSellIds = inventory
+    const baseList = displayInventory;
+    // 记录锁定 itemId 在当前显示列表中的原 index（取首次出现位置）
+    const lockedSlots: Map<string, number> = new Map();
+    baseList.forEach((s, i) => {
+      if (lockedItemIds.has(s.itemId) && !lockedSlots.has(s.itemId)) {
+        lockedSlots.set(s.itemId, i);
+      }
+    });
+    // 待出售 itemId：未锁定 + 品质匹配
+    const toSellIds = baseList
       .filter(stack => {
+        if (lockedItemIds.has(stack.itemId)) return false;
         const itemDef = getItemDef(stack.itemId);
         return itemDef && selected.includes(itemDef.rarity);
       })
-      .map(stack => stack.itemId);
-    if (toSellIds.length > 0) {
-      engineRef.current.batchSellItems(toSellIds);
-      setSortedInventory(null);
+      .map(s => s.itemId);
+    if (toSellIds.length === 0) {
+      setShowSellPicker(false);
+      return;
     }
+    engineRef.current.batchSellItems(toSellIds);
+    // 获取最新 inventory 并按当前 tab 过滤
+    const newInv = useGameStore.getState().inventory;
+    let newFiltered: ItemStack[];
+    if (inventoryTab === 'consumable') newFiltered = newInv;
+    else if (inventoryTab === 'material') newFiltered = newInv.filter(s => getItemDef(s.itemId)?.type === 'material');
+    else newFiltered = newInv.filter(s => getItemDef(s.itemId)?.type === 'enhancement');
+    // 重排：锁定 itemId 放到原 index，未锁定按原顺序填入其余位置
+    const unlocked = newFiltered.filter(s => !lockedItemIds.has(s.itemId));
+    const maxLen = Math.max(baseList.length, newFiltered.length);
+    const result: ItemStack[] = [];
+    const usedLocked = new Set<string>();
+    let ui = 0;
+    for (let i = 0; i < maxLen; i++) {
+      let placed = false;
+      for (const [itemId, origIdx] of lockedSlots) {
+        if (origIdx === i && !usedLocked.has(itemId)) {
+          const stack = newFiltered.find(s => s.itemId === itemId);
+          if (stack) {
+            result.push(stack);
+            usedLocked.add(itemId);
+            placed = true;
+          }
+          break;
+        }
+      }
+      if (!placed && ui < unlocked.length) {
+        result.push(unlocked[ui++]);
+      }
+    }
+    while (ui < unlocked.length) {
+      result.push(unlocked[ui++]);
+    }
+    setSortedInventory(result);
     setShowSellPicker(false);
-  }, [inventory, sellQualities, engineRef]);
+  }, [inventory, sellQualities, engineRef, lockedItemIds, displayInventory, inventoryTab]);
 
   const getEffectDescription = (itemDef: any): string => {
     switch (itemDef.effect) {
@@ -312,7 +363,11 @@ export function InventoryPanel({ engineRef }: InventoryPanelProps) {
   };
 
   return (
-    <div className="h-full flex relative gap-2">
+    <div
+      className="h-full flex relative gap-2"
+      style={lockMode ? { cursor: 'cell' } : undefined}
+      onClick={() => { if (lockMode) setLockMode(false); }}
+    >
       {/* 左列：快捷栏；框水平垂直居中 */}
       <div className="w-1/3 flex items-center justify-center">
         <div
@@ -471,19 +526,27 @@ export function InventoryPanel({ engineRef }: InventoryPanelProps) {
               const cd = itemDef.duration && itemDef.duration > 0 ? itemCooldowns[itemDef.effect] : null;
               const cdPercent = cd ? 1 - cd.remaining / cd.duration : 0;
               const isOnCooldown = cd && cd.remaining > 0;
+              const isLocked = lockedItemIds.has(stack.itemId);
 
               return (
                 <div
                   key={`${stack.itemId}-${index}`}
                   className={`flex flex-col items-center justify-center cursor-pointer relative overflow-hidden ${
-                    selectedItem?.index === inventory.indexOf(stack) && selectedItem?.source === 'inventory' ? 'ring-2 ring-[#00F5D4]' : ''
+                    !lockMode && selectedItem?.index === inventory.indexOf(stack) && selectedItem?.source === 'inventory' ? 'ring-2 ring-[#00F5D4]' : ''
                   }`}
                   style={{
                     width: '36px',
                     height: '36px',
                     ...itemSlotStyle(rarity),
                   }}
-                  onClick={() => handleItemClick(index)}
+                  onClick={(e) => {
+                    if (lockMode) {
+                      e.stopPropagation();
+                      toggleItemLock(stack.itemId);
+                    } else {
+                      handleItemClick(index);
+                    }
+                  }}
                 >
                   {isOnCooldown && (
                     <div
@@ -535,6 +598,24 @@ export function InventoryPanel({ engineRef }: InventoryPanelProps) {
                       {(cd.remaining / 1000).toFixed(1)}
                     </span>
                   )}
+                  {isLocked && (
+                    <span
+                      className="absolute"
+                      style={{
+                        left: '-2px',
+                        top: '50%',
+                        transform: 'translateY(-50%)',
+                        fontSize: '11px',
+                        color: neonYellow,
+                        textShadow: `0 0 4px ${hexToRgba(neonYellow, 0.7)}`,
+                        zIndex: 5,
+                        pointerEvents: 'none',
+                        lineHeight: 1,
+                      }}
+                    >
+                      🔒
+                    </span>
+                  )}
                 </div>
               );
             })}
@@ -564,21 +645,39 @@ export function InventoryPanel({ engineRef }: InventoryPanelProps) {
               lineHeight: 1,
             }}
           >
-            {inventory.length}/{displaySlots}
+            {displayInventory.length}/{displaySlots}
           </span>
           {/* 右侧：操作按钮 */}
-          <div className="flex gap-2">
+          <div className="flex gap-2 items-center">
+            {inventoryTab === 'consumable' && (
+              <button
+                onClick={(e) => { e.stopPropagation(); setLockMode(m => !m); }}
+                title={lockMode ? '点击仓库格子切换锁定，点击空白处解除' : '进入锁定模式'}
+                style={{
+                  fontSize: '11px',
+                  color: lockMode ? neonPink : (lockedItemIds.size > 0 ? neonYellow : '#8B80A0'),
+                  background: lockMode ? 'rgba(255, 0, 128, 0.15)' : (lockedItemIds.size > 0 ? 'rgba(255, 230, 0, 0.1)' : 'rgba(19, 16, 37, 0.5)'),
+                  border: `1px solid ${lockMode ? 'rgba(255, 0, 128, 0.5)' : (lockedItemIds.size > 0 ? 'rgba(255, 230, 0, 0.3)' : 'rgba(100, 100, 130, 0.2)')}`,
+                  borderRadius: '6px',
+                  padding: '2px 6px',
+                  cursor: 'pointer',
+                  lineHeight: 1,
+                  boxShadow: lockMode ? `0 0 8px rgba(255, 0, 128, 0.3)` : 'none',
+                }}
+              >
+                {lockMode ? '✕' : '🔒'}
+              </button>
+            )}
             <button
-              onClick={handleSort}
+              onClick={(e) => { e.stopPropagation(); handleSort(); }}
               style={{
                 fontFamily: '"Rajdhani", "Orbitron", monospace',
                 fontSize: '8px',
                 fontWeight: 600,
-                color: neonPurple,
-                background: 'rgba(176, 38, 255, 0.1)',
-                border: '1px solid rgba(176, 38, 255, 0.25)',
+                color: neonCyan,
+                background: 'rgba(0, 245, 212, 0.1)',
+                border: '1px solid rgba(0, 245, 212, 0.3)',
                 borderRadius: '6px',
-                boxShadow: '0 0 6px rgba(176, 38, 255, 0.1)',
                 padding: '4px 8px',
                 cursor: 'pointer',
                 minWidth: '52px',
@@ -587,7 +686,7 @@ export function InventoryPanel({ engineRef }: InventoryPanelProps) {
               整理
             </button>
             <button
-              onClick={() => setShowSellPicker(true)}
+              onClick={(e) => { e.stopPropagation(); setShowSellPicker(true); }}
               style={{
                 fontFamily: '"Rajdhani", "Orbitron", monospace',
                 fontSize: '8px',
@@ -606,6 +705,40 @@ export function InventoryPanel({ engineRef }: InventoryPanelProps) {
           </div>
         </div>
         </div>
+
+      {/* 锁定提示 toast */}
+      {lockToast && (
+        <div
+          className="absolute left-1/2 top-2 z-40"
+          style={{
+            transform: 'translateX(-50%)',
+            fontFamily: '"Rajdhani", "Orbitron", monospace',
+            fontSize: '10px',
+            fontWeight: 600,
+            color: neonPink,
+            background: 'rgba(40, 10, 25, 0.9)',
+            border: `1px solid ${hexToRgba(neonPink, 0.5)}`,
+            borderRadius: '6px',
+            padding: '4px 10px',
+            boxShadow: `0 0 10px ${hexToRgba(neonPink, 0.3)}`,
+            pointerEvents: 'none',
+            whiteSpace: 'nowrap',
+          }}
+        >
+          {lockToast}
+        </div>
+      )}
+
+      {/* 锁定模式遮罩提示 */}
+      {lockMode && (
+        <div
+          className="absolute inset-0 pointer-events-none z-20"
+          style={{
+            background: 'repeating-linear-gradient(45deg, transparent, transparent 8px, rgba(255, 0, 128, 0.04) 8px, rgba(255, 0, 128, 0.04) 16px)',
+            borderRadius: '12px',
+          }}
+        />
+      )}
 
       {/* 批量出售品质选择弹窗 */}
       {showSellPicker && (

@@ -1,13 +1,9 @@
-import { useMemo, useState } from 'react';
+import { useMemo, useState, memo } from 'react';
 import { useGameStore } from '../store/gameStore';
 import { WEAPONS, ARMORS, RARITY_COLORS } from '../game/data/equipment';
 import { ENEMY_CONFIGS, type EnemyConfig } from '../game/data/enemies';
 import type { Equipment, Achievement } from '../game/types/game';
-
-const neonCyan = '#00F5D4';
-const neonPurple = '#B026FF';
-const neonPink = '#FF0080';
-const neonYellow = '#FFE600';
+import { neonCyan, neonPurple, neonPink, neonYellow, neonText } from '../theme/colors';
 
 const rarityColors: Record<string, string> = {
   common: '#9CA3AF',
@@ -36,16 +32,13 @@ const enemyIcons: Record<string, string> = {
 
 type TabType = 'enemies' | 'equipment' | 'achievements';
 
-export function CodexPanel() {
-  const { codexEntries, player, achievements } = useGameStore();
+function CodexPanelImpl() {
+  // 性能优化：使用细粒度 selector
+  const codexEntries = useGameStore(s => s.codexEntries);
+  const player = useGameStore(s => s.player);
+  const achievements = useGameStore(s => s.achievements);
   const [activeTab, setActiveTab] = useState<TabType>('enemies');
   const [selectedItemId, setSelectedItemId] = useState<string | null>(null);
-
-  const neonText = {
-    fontFamily: '"Rajdhani", "Orbitron", "Courier New", monospace',
-    fontWeight: 600,
-    letterSpacing: '0.5px',
-  } as React.CSSProperties;
 
   const enemyList = useMemo(() => {
     return Object.entries(ENEMY_CONFIGS).map(([id, config]) => ({
@@ -639,3 +632,6 @@ export function CodexPanel() {
     </div>
   );
 }
+
+// 性能优化：memo 包装
+export const CodexPanel = memo(CodexPanelImpl);

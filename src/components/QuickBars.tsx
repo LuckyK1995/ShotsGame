@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react';
 import { useGameStore } from '../store/gameStore';
 import { getItemDef, RARITY_COLORS } from '../game/data/equipment';
-import { itemSlotStyle, emptySlotStyle, hexToRgba } from './InventoryPanel';
+import { itemSlotStyle, emptySlotStyle, hexToRgba } from '../utils/styles';
 import type { ItemRarity, ItemStack, Skill } from '../game/types/game';
+import { neonCyan, neonPurple, neonBlue } from '../theme/colors';
 
 interface EngineRefShape {
   current: {
@@ -15,10 +16,6 @@ interface EngineRefShape {
 interface QuickBarsProps {
   engineRef: EngineRefShape;
 }
-
-const neonCyan = '#00F5D4';
-const neonPurple = '#B026FF';
-const neonBlue = '#4FACFE';
 
 const neonText: React.CSSProperties = {
   fontFamily: '"Rajdhani", "Orbitron", "Courier New", monospace',

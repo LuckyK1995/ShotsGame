@@ -12,19 +12,10 @@ import {
   GemType,
 } from '../game/data/gems';
 import { RARITY_COLORS } from '../game/data/equipment';
+import { neonCyan, neonPurple, neonPink, neonYellow, neonGreen } from '../theme/colors';
+import { hexToRgba } from '../utils/styles';
 
-const neonCyan = '#00F5D4';
-const neonPurple = '#B026FF';
-const neonPink = '#FF0080';
-const neonYellow = '#FFE600';
-const neonGreen = '#00FF9D';
-
-function hexToRgba(hex: string, alpha: number): string {
-  const r = parseInt(hex.slice(1, 3), 16);
-  const g = parseInt(hex.slice(3, 5), 16);
-  const b = parseInt(hex.slice(5, 7), 16);
-  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
-}
+// hexToRgba 已移至 utils/styles.ts（共享版本）
 
 const cardStyle = {
   background: 'rgba(19, 16, 37, 0.95)',
@@ -98,25 +89,16 @@ export function GemEmbedModal({ equipmentId, source, onClose, engineRef }: GemEm
   }, [socketedGems]);
 
   // 宝石列表：已锁定类型时仅显示同类，未锁定时显示全部
+  // 按仓库中 gemInventory 的顺序显示，不再按 type 分组、不重排
   const visibleGems = useMemo(() => {
-    const groups: { type: string; gems: { stack: ItemStack; def: NonNullable<ReturnType<typeof getGemDef>> }[] }[] = [];
-    const typeMap = new Map<string, typeof groups[number]>();
+    const list: { stack: ItemStack; def: NonNullable<ReturnType<typeof getGemDef>> }[] = [];
     for (const stack of gemInventory) {
       const def = getGemDef(stack.itemId);
       if (!def) continue;
-      // 锁定类型过滤
       if (lockedType && def.type !== lockedType) continue;
-      if (!typeMap.has(def.type)) {
-        const g = { type: def.type, gems: [] };
-        typeMap.set(def.type, g);
-        groups.push(g);
-      }
-      typeMap.get(def.type)!.gems.push({ stack, def });
+      list.push({ stack, def });
     }
-    for (const g of groups) {
-      g.gems.sort((a, b) => (a.def.rarity === 'advanced' ? -1 : 1) - (b.def.rarity === 'advanced' ? -1 : 1));
-    }
-    return groups;
+    return list;
   }, [gemInventory, lockedType]);
 
   const handleEmbed = () => {
@@ -377,88 +359,84 @@ export function GemEmbedModal({ equipmentId, source, onClose, engineRef }: GemEm
                   {lockedType ? '无同类宝石' : '背包没有宝石'}
                 </div>
               ) : (
-                visibleGems.map(group => (
-                  <div key={group.type} className="flex flex-col gap-1">
-                    {group.gems.map(({ stack, def }) => {
-                      const isSelected = selectedGemId === stack.itemId;
-                      const info = GEM_TYPE_INFO[def.type];
-                      const statName = info.name.replace('宝石', '');
-                      // 宝石名称颜色对应品质颜色
-                      const rarityColor = GEM_RARITY_BORDER[def.rarity];
-                      // 宝石属性颜色对应战斗力面板的颜色
-                      const combatColor: Record<GemType, string> = {
-                        attack: neonPink,
-                        health: '#FF2D55',
-                        defense: '#5BA3E0',
-                        critRate: neonPurple,
-                        resistance: '#5BA3E0',
-                      };
-                      return (
-                        <button
-                          key={stack.itemId}
-                          onClick={() => setSelectedGemId(stack.itemId)}
+                visibleGems.map(({ stack, def }) => {
+                  const isSelected = selectedGemId === stack.itemId;
+                  const info = GEM_TYPE_INFO[def.type];
+                  const statName = info.name.replace('宝石', '');
+                  // 宝石名称颜色对应品质颜色
+                  const rarityColor = GEM_RARITY_BORDER[def.rarity];
+                  // 宝石属性颜色对应战斗力面板的颜色
+                  const combatColor: Record<GemType, string> = {
+                    attack: neonPink,
+                    health: '#FF2D55',
+                    defense: '#5BA3E0',
+                    critRate: neonPurple,
+                    resistance: '#5BA3E0',
+                  };
+                  return (
+                    <button
+                      key={stack.itemId}
+                      onClick={() => setSelectedGemId(stack.itemId)}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '4px',
+                        padding: '2px 4px',
+                        background: isSelected
+                          ? `linear-gradient(90deg, ${hexToRgba(rarityColor, 0.25)} 0%, ${hexToRgba(rarityColor, 0.08)} 100%)`
+                          : 'rgba(19, 16, 37, 0.6)',
+                        border: `1px solid ${isSelected ? rarityColor : 'rgba(100, 100, 130, 0.25)'}`,
+                        borderRadius: '4px',
+                        cursor: 'pointer',
+                        width: '100%',
+                        textAlign: 'left',
+                        boxShadow: isSelected ? `0 0 4px ${hexToRgba(rarityColor, 0.3)}` : 'none',
+                      }}
+                    >
+                      {/* Panel 1: 图标 + 名称 */}
+                      <div className="flex items-center gap-1" style={{ flex: 1, minWidth: 0 }}>
+                        <span style={{ fontSize: '10px', flexShrink: 0 }}>{def.icon}</span>
+                        <span
                           style={{
-                            display: 'flex',
-                            alignItems: 'center',
-                            gap: '4px',
-                            padding: '2px 4px',
-                            background: isSelected
-                              ? `linear-gradient(90deg, ${hexToRgba(rarityColor, 0.25)} 0%, ${hexToRgba(rarityColor, 0.08)} 100%)`
-                              : 'rgba(19, 16, 37, 0.6)',
-                            border: `1px solid ${isSelected ? rarityColor : 'rgba(100, 100, 130, 0.25)'}`,
-                            borderRadius: '4px',
-                            cursor: 'pointer',
-                            width: '100%',
-                            textAlign: 'left',
-                            boxShadow: isSelected ? `0 0 4px ${hexToRgba(rarityColor, 0.3)}` : 'none',
+                            ...neonText,
+                            fontSize: '7.5px',
+                            color: isSelected ? '#FFFFFF' : rarityColor,
+                            fontWeight: 700,
+                            minWidth: 0,
+                            overflow: 'hidden',
+                            textOverflow: 'ellipsis',
+                            whiteSpace: 'nowrap',
                           }}
                         >
-                          {/* Panel 1: 图标 + 名称 */}
-                          <div className="flex items-center gap-1" style={{ flex: 1, minWidth: 0 }}>
-                            <span style={{ fontSize: '10px', flexShrink: 0 }}>{def.icon}</span>
-                            <span
-                              style={{
-                                ...neonText,
-                                fontSize: '7.5px',
-                                color: isSelected ? '#FFFFFF' : rarityColor,
-                                fontWeight: 700,
-                                minWidth: 0,
-                                overflow: 'hidden',
-                                textOverflow: 'ellipsis',
-                                whiteSpace: 'nowrap',
-                              }}
-                            >
-                              {def.name}
-                            </span>
-                          </div>
-                          {/* Panel 2: 属性+值 ×数量 */}
-                          <div className="flex items-center gap-1" style={{ flexShrink: 0 }}>
-                            <span
-                              style={{
-                                ...neonText,
-                                fontSize: '6.5px',
-                                color: combatColor[def.type],
-                                fontWeight: 700,
-                              }}
-                            >
-                              {statName}+{def.value}
-                            </span>
-                            <span
-                              style={{
-                                ...neonText,
-                                fontSize: '6.5px',
-                                color: neonYellow,
-                                fontWeight: 700,
-                              }}
-                            >
-                              ×{stack.count}
-                            </span>
-                          </div>
-                        </button>
-                      );
-                    })}
-                  </div>
-                ))
+                          {def.name}
+                        </span>
+                      </div>
+                      {/* Panel 2: 属性+值 ×数量 */}
+                      <div className="flex items-center gap-1" style={{ flexShrink: 0 }}>
+                        <span
+                          style={{
+                            ...neonText,
+                            fontSize: '6.5px',
+                            color: combatColor[def.type],
+                            fontWeight: 700,
+                          }}
+                        >
+                          {statName}+{def.value}
+                        </span>
+                        <span
+                          style={{
+                            ...neonText,
+                            fontSize: '6.5px',
+                            color: neonYellow,
+                            fontWeight: 700,
+                          }}
+                        >
+                          ×{stack.count}
+                        </span>
+                      </div>
+                    </button>
+                  );
+                })
               )}
             </div>
           </div>

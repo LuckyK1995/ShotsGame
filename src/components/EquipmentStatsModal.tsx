@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, memo } from 'react';
 import { useGameStore } from '../store/gameStore';
 import { Equipment, EquipRarity, ElementType } from '../game/types/game';
 import { EquipmentIcon } from './EquipmentIcon';
@@ -12,15 +12,11 @@ import {
 } from '../game/data/equipment';
 import { getEnhanceAttackBonus } from '../game/data/enhanceItems';
 import { ENCHANT_STAT_INFO } from '../game/data/enchantItems';
+import { neonCyan, neonPurple, neonPink, neonYellow } from '../theme/colors';
 
 interface EquipmentStatsModalProps {
   onClose: () => void;
 }
-
-const neonCyan = '#00F5D4';
-const neonPurple = '#B026FF';
-const neonPink = '#FF0080';
-const neonYellow = '#FFE600';
 
 const ELEMENT_LABELS: Record<ElementType, string> = {
   fire: '火',
@@ -225,8 +221,9 @@ function calcEquipTotalStats(equipment: Equipment[]): EquipStats {
   return stats;
 }
 
-export function EquipmentStatsModal({ onClose }: EquipmentStatsModalProps) {
-  const { equipment } = useGameStore();
+function EquipmentStatsModalImpl({ onClose }: EquipmentStatsModalProps) {
+  // 性能优化：使用细粒度 selector
+  const equipment = useGameStore(s => s.equipment);
   const [equipIndex, setEquipIndex] = useState(0);
   const [rightPage, setRightPage] = useState(0);
 
@@ -311,7 +308,7 @@ export function EquipmentStatsModal({ onClose }: EquipmentStatsModalProps) {
           {/* 左侧：上装备属性 + 下套装属性 */}
           <div className="flex flex-col gap-2" style={{ width: '60%' }}>
             {/* 左上：单件装备属性（占2/3高度） */}
-            <div className="flex flex-col" style={{ ...panelStyle, height: '66%', padding: '6px 8px' }}>
+            <div className="flex flex-col" style={{ ...panelStyle, height: 'calc(66% + 20px)', padding: '6px 8px' }}>
               <div className="flex items-center justify-between mb-1.5">
                 <span style={{ ...neonText, fontSize: '8px', color: neonPurple }}>装备属性</span>
                 <div className="flex gap-1">
@@ -480,7 +477,7 @@ export function EquipmentStatsModal({ onClose }: EquipmentStatsModalProps) {
             </div>
 
             {/* 左下：套装属性（占1/3高度） */}
-            <div className="flex flex-col" style={{ ...panelStyle, height: '34%', padding: '6px 8px' }}>
+            <div className="flex flex-col" style={{ ...panelStyle, height: 'calc(34% - 20px)', padding: '6px 8px' }}>
               <span style={{ ...neonText, fontSize: '8px', color: neonPurple, marginBottom: '4px' }}>套装属性</span>
               <div className="flex-1 overflow-y-auto space-y-1">
                 {setGroups.length === 0 ? (
@@ -535,6 +532,9 @@ export function EquipmentStatsModal({ onClose }: EquipmentStatsModalProps) {
     </div>
   );
 }
+
+// 性能优化：memo 包装
+export const EquipmentStatsModal = memo(EquipmentStatsModalImpl);
 
 function StatRow({ label, value, color }: { label: string; value: string; color: string }) {
   return (

@@ -176,3 +176,64 @@ body {
   .mythic-star, .mythic-star-glow { animation: none; opacity: 0.85; }
 }
 
+/* === 性能优化：将组件内联 <style> 的 keyframes 提取到全局，避免每次渲染重新注入 === */
+
+/* 强化成功特效 */
+@keyframes enhance-success-impact {
+  0%   { transform: scale(0.2); opacity: 0; }
+  20%  { transform: scale(1.6); opacity: 1; }
+  40%  { transform: scale(2.0); opacity: 1; }
+  65%  { transform: scale(2.2); opacity: 0.9; }
+  100% { transform: scale(2.4); opacity: 0; }
+}
+.enhance-success-toast {
+  animation: enhance-success-impact 0.8s cubic-bezier(0.25, 0.8, 0.4, 1) forwards;
+  will-change: transform, opacity;
+}
+
+/* 跑马灯边框（装备栏选中） */
+.marquee-slot .marquee-border {
+  position: absolute;
+  top: -2.5px; left: -2.5px;
+  width: calc(100% + 5px);
+  height: calc(100% + 5px);
+  pointer-events: none;
+}
+.marquee-slot .marquee-border rect {
+  fill: none;
+  stroke: var(--mc);
+  stroke-width: 2.5;
+  stroke-dasharray: 5 5;
+  animation: marqueeDash 2s linear infinite;
+}
+@keyframes marqueeDash {
+  0%   { stroke-dashoffset: 0; }
+  100% { stroke-dashoffset: -10; }
+}
+
+/* 主界面动画 */
+@keyframes twinkle {
+  0%, 100% { opacity: 0.25; }
+  50% { opacity: 0.85; }
+}
+@keyframes float {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-8px); }
+}
+@keyframes glow-pulse {
+  0%, 100% { opacity: 0.5; }
+  50% { opacity: 0.9; }
+}
+
+/* 稀有掉落提示 */
+@keyframes rareDropIn {
+  0% { opacity: 0; transform: translateY(-8px) scale(0.92); }
+  100% { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+/* 药水信息弹入 */
+@keyframes potionInfoIn {
+  0% { opacity: 0; transform: translateY(-4px); }
+  100% { opacity: 1; transform: translateY(0); }
+}
+

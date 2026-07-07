@@ -4,7 +4,6 @@ import { EquipmentIcon } from './EquipmentIcon';
 import { EnhanceItemIcon } from './EnhanceItemIcon';
 import {
   ENHANCE_ITEMS,
-  ENHANCE_ITEM_ORDER,
   getEnhanceSuccessRate,
   getEnhanceFailResult,
   getEnhanceGoldCost,
@@ -12,19 +11,10 @@ import {
 } from '../game/data/enhanceItems';
 import type { EnhanceItemId } from '../game/data/enhanceItems';
 import { RARITY_COLORS } from '../game/data/equipment';
+import { neonCyan, neonPurple, neonPink, neonYellow, neonGreen, neonText } from '../theme/colors';
+import { hexToRgba } from '../utils/styles';
 
-const neonCyan = '#00F5D4';
-const neonPurple = '#B026FF';
-const neonPink = '#FF0080';
-const neonYellow = '#FFE600';
-const neonGreen = '#00FF9D';
-
-function hexToRgba(hex: string, alpha: number): string {
-  const r = parseInt(hex.slice(1, 3), 16);
-  const g = parseInt(hex.slice(3, 5), 16);
-  const b = parseInt(hex.slice(5, 7), 16);
-  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
-}
+// hexToRgba 已移至 utils/styles.ts（共享版本）
 
 const cardStyle = {
   background: 'rgba(19, 16, 37, 0.95)',
@@ -32,12 +22,6 @@ const cardStyle = {
   border: '1px solid rgba(176, 38, 255, 0.35)',
   borderRadius: '12px',
   boxShadow: '0 0 24px rgba(176, 38, 255, 0.2), inset 0 1px 0 rgba(255,255,255,0.05)',
-};
-
-const neonText: React.CSSProperties = {
-  fontFamily: '"Rajdhani", "Orbitron", "Courier New", monospace',
-  fontWeight: 600,
-  letterSpacing: '0.5px',
 };
 
 interface GameEngineRef {
@@ -89,12 +73,15 @@ export function EnhanceModal({ equipmentId, source, onClose, engineRef }: Enhanc
   const baseRate = getEnhanceSuccessRate(currentLevel);
   const failResult = getEnhanceFailResult(currentLevel);
 
-  // 道具列表（按顺序）
-  const items = ENHANCE_ITEM_ORDER.map(id => {
-    const def = ENHANCE_ITEMS[id];
-    const stack = enhanceItemInventory.find(s => s.itemId === id);
-    return { def, count: stack?.count ?? 0 };
-  });
+  // 道具列表：按仓库中 enhanceItemInventory 的顺序显示
+  const items = enhanceItemInventory
+    .map(stack => {
+      const id = stack.itemId as EnhanceItemId;
+      const def = ENHANCE_ITEMS[id];
+      if (!def) return null;
+      return { def, count: stack.count };
+    })
+    .filter((x): x is { def: NonNullable<typeof ENHANCE_ITEMS[EnhanceItemId]>; count: number } => x !== null);
 
   // 金币消耗
   const goldCost = getEnhanceGoldCost(equipment.level, equipment.rarity, currentLevel);
@@ -167,6 +154,7 @@ export function EnhanceModal({ equipmentId, source, onClose, engineRef }: Enhanc
       style={{ background: 'rgba(0, 0, 0, 0.8)', backdropFilter: 'blur(6px)' }}
       onClick={onClose}
     >
+      {/* 强化成功特效：keyframes 已提取至 index.css */}
       <div
         className="flex flex-col"
         style={{
@@ -547,14 +535,14 @@ export function EnhanceModal({ equipmentId, source, onClose, engineRef }: Enhanc
         <div
           key={toastKey}
           className={`absolute inset-0 flex items-center justify-center pointer-events-none z-40 ${
-            floatToast.success ? 'gem-embed-success-toast' : 'gem-embed-fail-toast'
+            floatToast.success ? 'enhance-success-toast' : 'gem-embed-fail-toast'
           }`}
           style={{ top: 0, left: 0, right: 0, bottom: 0 }}
         >
           <div
             style={{
               ...neonText,
-              fontSize: floatToast.success ? '18px' : '12px',
+              fontSize: floatToast.success ? '14px' : '12px',
               fontWeight: 700,
               color: floatToast.success ? neonGreen : '#FF2D55',
               textShadow: `0 0 12px ${floatToast.success ? hexToRgba(neonGreen, 0.9) : 'rgba(255, 45, 85, 0.9)'}, 0 0 24px ${floatToast.success ? hexToRgba(neonGreen, 0.5) : 'rgba(255, 45, 85, 0.5)'}`,

@@ -1,7 +1,9 @@
+import { memo } from 'react';
 import { useGameStore } from '../store/gameStore';
 
-export function WaveNotice() {
-  const { gameState } = useGameStore();
+function WaveNoticeImpl() {
+  // 性能优化：使用细粒度 selector
+  const gameState = useGameStore(s => s.gameState);
 
   if (!gameState) return null;
 
@@ -74,3 +76,6 @@ export function WaveNotice() {
     </div>
   );
 }
+
+// 性能优化：memo 包装
+export const WaveNotice = memo(WaveNoticeImpl);

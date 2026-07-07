@@ -26,6 +26,8 @@ import type {
   Achievement,
   ItemDef,
   SocketedGem,
+  Mail,
+  MailAttachments,
 } from './types/game';
 import {
   ObjectPool,
@@ -104,6 +106,7 @@ export class GameEngine {
   onEquipmentChange?: (equipment: Equipment[]) => void;
   onEquipmentStorageChange?: (storage: Equipment[]) => void;
   onPlayerChange?: (player: Player) => void;
+  onMailChange?: (mails: Mail[]) => void;
 
   private manualShootCooldown: number = 0;
   private autoShootTimer: number = 0;
@@ -173,6 +176,10 @@ export class GameEngine {
   }
 
   private droppedEquipmentMap: Map<string, Equipment> = new Map();
+
+  // 邮件系统：仓库满时无法拾取的掉落物，按波次收集，波次结束后发送
+  private pendingMailDrops: MailAttachments = {};
+  private mails: Mail[] = [];
 
   private parallaxLayers: { offset: number; speed: number; buildings: { x: number; w: number; h: number }[] }[] = [];
   private weather: WeatherState = { type: 'clear', duration: 0, intensity: 0, transitionTimer: 0 };
@@ -882,6 +889,16 @@ expToNextLevel: Math.floor(10 + Math.pow(bs.level, 1.7) * 4 + bs.level * 4),
     enemy.freezeChance = config.baseFreezeChance;
     enemy.lightningChance = config.baseLightningChance;
     (enemy as any).configKey = type;
+    // 清理弓箭手/刺客的残留状态，防止 ObjectPool 复用时卡在攻击动画中
+    (enemy as any).attackWindup = 0;
+    (enemy as any).attackRecovery = 0;
+    (enemy as any).hitStunTimer = 0;
+    (enemy as any).frozenUntil = 0;
+    // 清理残留的 debuffs 和 weakPoints，防止复用时带有上一次的异常状态
+    if (enemy.debuffs) enemy.debuffs.length = 0;
+    else enemy.debuffs = [];
+    if (enemy.weakPoints) enemy.weakPoints.length = 0;
+    else enemy.weakPoints = [];
   }
 
   private resetDropItem(item: DropItem, type: DropItem['type'], x: number, y: number, value: number, itemId?: string, equipmentId?: string): void {
@@ -2348,8 +2365,142 @@ expToNextLevel: Math.floor(10 + Math.pow(bs.level, 1.7) * 4 + bs.level * 4),
     if (this.onPlayerChange) {
       this.onPlayerChange(this.player);
     }
-    
+
+    // 发送战斗邮件：本波次仓库满无法拾取的掉落物
+    this.sendBattleMail();
+
     this.saveGame();
+  }
+
+  // 发送战斗邮件：仓库满时收集的掉落物
+  private sendBattleMail(): void {
+    const attachments = this.pendingMailDrops;
+    const hasEquip = attachments.equipment && attachments.equipment.length > 0;
+    const hasItems = attachments.items && attachments.items.length > 0;
+    if (!hasEquip && !hasItems) return;
+
+    const equipCount = attachments.equipment?.length || 0;
+    const itemCount = attachments.items?.reduce((s, i) => s + i.count, 0) || 0;
+    const total = equipCount + itemCount;
+    if (total <= 0) return;
+
+    const mail: Mail = {
+      id: `mail_battle_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+      type: 'battle',
+      title: `第${this.gameState.currentWave}波 战利品补给`,
+      body: `仓库已满，以下${total}件战利品暂存于邮件中，请及时领取。`,
+      timestamp: Date.now(),
+      read: false,
+      claimed: false,
+      attachments: { ...attachments },
+    };
+
+    // 按时间倒序插入（最新的在前）
+    this.mails.unshift(mail);
+    if (this.mails.length > 50) this.mails.length = 50;
+
+    // 清空待发
+    this.pendingMailDrops = {};
+
+    if (this.onMailChange) {
+      this.onMailChange([...this.mails]);
+    }
+  }
+
+  // 领取邮件附件
+  claimMailAttachments(mailId: string): { success: boolean; reason?: string } {
+    const mail = this.mails.find(m => m.id === mailId);
+    if (!mail) return { success: false, reason: '邮件不存在' };
+    if (mail.claimed) return { success: false, reason: '已领取' };
+    if (!mail.attachments) {
+      mail.claimed = true;
+      mail.read = true;
+      if (this.onMailChange) this.onMailChange([...this.mails]);
+      return { success: true };
+    }
+
+    const att = mail.attachments;
+    // 装备：逐件放入仓库，满了的保留在邮件中
+    if (att.equipment && att.equipment.length > 0) {
+      const remaining: Equipment[] = [];
+      for (const eq of att.equipment) {
+        if (this.equipmentStorage.length < 200) {
+          this.equipmentStorage.push(eq);
+        } else {
+          remaining.push(eq);
+        }
+      }
+      if (remaining.length > 0) {
+        att.equipment = remaining;
+      } else {
+        att.equipment = undefined;
+      }
+      if (this.onEquipmentStorageChange) this.onEquipmentStorageChange(this.equipmentStorage);
+    }
+    // 物品：逐组放入仓库
+    if (att.items && att.items.length > 0) {
+      const remainingItems: ItemStack[] = [];
+      for (const it of att.items) {
+        const existing = this.inventory.find(i => i.itemId === it.itemId);
+        if (existing) {
+          existing.count += it.count;
+        } else if (this.inventory.length < 200) {
+          this.inventory.push({ ...it });
+        } else {
+          remainingItems.push({ ...it });
+        }
+      }
+      if (remainingItems.length > 0) {
+        att.items = remainingItems;
+      } else {
+        att.items = undefined;
+      }
+      if (this.onInventoryChange) this.onInventoryChange(this.inventory);
+    }
+    // 金币
+    if (att.gold && att.gold > 0) {
+      this.player.score += att.gold;
+      att.gold = undefined;
+      if (this.onPlayerChange) this.onPlayerChange(this.player);
+    }
+
+    // 仅当所有附件都领取完才标记 claimed
+    const stillHas = (att.equipment && att.equipment.length > 0) ||
+      (att.items && att.items.length > 0) ||
+      (att.gold && att.gold > 0);
+    if (!stillHas) {
+      mail.claimed = true;
+      mail.read = true;
+    }
+    if (this.onMailChange) this.onMailChange([...this.mails]);
+    return { success: true, reason: stillHas ? '仓库已满，部分附件未能领取' : undefined };
+  }
+
+  removeMail(mailId: string): void {
+    const idx = this.mails.findIndex(m => m.id === mailId);
+    if (idx === -1) return;
+    const mail = this.mails[idx];
+    // 未领取且有附件的不能删除
+    if (!mail.claimed && mail.attachments) {
+      const has = (mail.attachments.equipment?.length || 0) > 0 ||
+        (mail.attachments.items?.length || 0) > 0 ||
+        (mail.attachments.gold || 0) > 0;
+      if (has) return;
+    }
+    this.mails.splice(idx, 1);
+    if (this.onMailChange) this.onMailChange([...this.mails]);
+  }
+
+  markMailRead(mailId: string): void {
+    const mail = this.mails.find(m => m.id === mailId);
+    if (mail && !mail.read) {
+      mail.read = true;
+      if (this.onMailChange) this.onMailChange([...this.mails]);
+    }
+  }
+
+  getMails(): Mail[] {
+    return [...this.mails];
   }
 
   private spawnEnemy(): void {
@@ -2974,15 +3125,15 @@ expToNextLevel: Math.floor(10 + Math.pow(bs.level, 1.7) * 4 + bs.level * 4),
           const shooterRange = this.player.range * 0.75;
           const inRange = playerDist <= shooterRange && playerDist > 20;
 
+          // 始终更新攻击计时器，防止玩家移出射程后弓箭手卡在攻击动画中
+          this.updateRangedShooterAttack(enemy, dt, now);
+
           if (inAttackAnim) {
             enemy.animFrame += dt * 10;
           } else if (!inRange) {
             const effectiveSpeed = enemy.speed * speedMultiplier;
             enemy.x -= effectiveSpeed * dt;
             enemy.animFrame += effectiveSpeed * dt * 30;
-          }
-          if (inRange) {
-            this.updateRangedShooterAttack(enemy, dt, now);
           }
         } else if (isAssassin) {
           // 刺客：进入玩家射程前正常向左移动，进入射程后朝玩家突进
@@ -3105,7 +3256,12 @@ expToNextLevel: Math.floor(10 + Math.pow(bs.level, 1.7) * 4 + bs.level * 4),
     if (windup > 0) {
       (enemy as any).attackWindup = Math.max(0, windup - dtMs);
       if ((enemy as any).attackWindup <= 0) {
-        this.fireRangedShooterProjectile(enemy);
+        // 只有在射程内才发射子弹，防止玩家移出射程后弓箭手在远处乱射
+        const shooterRange = this.player.range * 0.75;
+        const distToPlayer = (enemy.x + enemy.width / 2) - (this.player.x + this.player.width / 2);
+        if (distToPlayer > 0 && distToPlayer <= shooterRange) {
+          this.fireRangedShooterProjectile(enemy);
+        }
         (enemy as any).attackRecovery = 600;
       }
       return;
@@ -3328,6 +3484,13 @@ expToNextLevel: Math.floor(10 + Math.pow(bs.level, 1.7) * 4 + bs.level * 4),
       existing.count++;
     } else if (this.inventory.length < 200) {
       this.inventory.push({ itemId, count: 1 });
+    } else {
+      // 仓库已满，无法拾取，收集到待发邮件
+      if (!this.pendingMailDrops.items) this.pendingMailDrops.items = [];
+      const exist = this.pendingMailDrops.items.find(i => i.itemId === itemId);
+      if (exist) exist.count++;
+      else this.pendingMailDrops.items.push({ itemId, count: 1 });
+      return;
     }
     this.addItemObtained(itemId);
     if (this.onInventoryChange) {
@@ -3361,6 +3524,10 @@ expToNextLevel: Math.floor(10 + Math.pow(bs.level, 1.7) * 4 + bs.level * 4),
       if (this.onEquipmentStorageChange) {
         this.onEquipmentStorageChange(this.equipmentStorage);
       }
+    } else {
+      // 装备仓库已满，无法拾取，收集到待发邮件
+      if (!this.pendingMailDrops.equipment) this.pendingMailDrops.equipment = [];
+      this.pendingMailDrops.equipment.push(equipment);
     }
   }
 
@@ -5095,6 +5262,7 @@ expToNextLevel: Math.floor(10 + Math.pow(bs.level, 1.7) * 4 + bs.level * 4),
       highestWave: this.highestWave,
       codexEntries: this.codexEntries,
       achievements: this.achievements,
+      mails: this.mails,
       savedAt: Date.now(),
     };
     try {
@@ -5173,7 +5341,10 @@ expToNextLevel: Math.floor(10 + Math.pow(bs.level, 1.7) * 4 + bs.level * 4),
       if (saveData.achievements) {
         this.achievements = saveData.achievements;
       }
-      
+      if (saveData.mails) {
+        this.mails = saveData.mails;
+      }
+
       this.calculatePlayerStats();
       this.initActiveSkills();
       

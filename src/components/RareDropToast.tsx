@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, memo } from 'react';
 import { useGameStore } from '../store/gameStore';
 import { RARITY_COLORS, RARITY_LABELS } from '../game/data/equipment';
 
@@ -10,7 +10,8 @@ const RARITY_GLOW: Record<string, string> = {
 };
 
 // 高品质掉落气泡提示：BOSS 血条下方水平居中堆叠显示，3 秒后自动消失
-export function RareDropToast() {
+function RareDropToastImpl() {
+  // 性能优化：已使用细粒度 selector
   const notifications = useGameStore(s => s.rareDropNotifications);
   const removeNotification = useGameStore(s => s.removeRareDropNotification);
 
@@ -92,12 +93,10 @@ export function RareDropToast() {
           </div>
         );
       })}
-      <style>{`
-        @keyframes rareDropIn {
-          0% { opacity: 0; transform: translateY(-8px) scale(0.92); }
-          100% { opacity: 1; transform: translateY(0) scale(1); }
-        }
-      `}</style>
+      {/* keyframes 已提取至 index.css */}
     </div>
   );
 }
+
+// 性能优化：memo 包装
+export const RareDropToast = memo(RareDropToastImpl);

@@ -390,3 +390,22 @@ export interface GameConfig {
   bossWaveInterval: number;
   spawnZoneWidth: number;
 }
+
+// 邮件附件：仓库满时无法拾取的掉落物
+export interface MailAttachments {
+  equipment?: Equipment[];
+  items?: ItemStack[];
+  gold?: number;
+}
+
+// 邮件
+export interface Mail {
+  id: string;
+  type: 'system' | 'battle';
+  title: string;
+  body: string;
+  timestamp: number;
+  read: boolean;
+  claimed: boolean;
+  attachments?: MailAttachments;
+}

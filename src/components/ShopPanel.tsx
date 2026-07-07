@@ -1,13 +1,9 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, memo } from 'react';
 import { useGameStore } from '../store/gameStore';
 import { RARITY_COLORS, ITEMS, getItemDef } from '../game/data/equipment';
 import { EquipmentIcon } from './EquipmentIcon';
 import type { ShopItem, EquipRarity } from '../game/types/game';
-
-const neonCyan = '#00F5D4';
-const neonPurple = '#B026FF';
-const neonPink = '#FF0080';
-const neonYellow = '#FFE600';
+import { neonCyan, neonPurple, neonPink, neonYellow } from '../theme/colors';
 
 const rarityNames: Record<string, string> = {
   common: '普通',
@@ -31,8 +27,9 @@ interface ShopPanelProps {
   onClose: () => void;
 }
 
-export function ShopPanel({ engineRef, isOpen, onClose }: ShopPanelProps) {
-  const { player } = useGameStore();
+function ShopPanelImpl({ engineRef, isOpen, onClose }: ShopPanelProps) {
+  // 性能优化：使用细粒度 selector
+  const player = useGameStore(s => s.player);
   const [shopItems, setShopItems] = useState<ShopItem[]>([]);
 
   useEffect(() => {
@@ -309,3 +306,6 @@ export function ShopPanel({ engineRef, isOpen, onClose }: ShopPanelProps) {
     </div>
   );
 }
+
+// 性能优化：memo 包装
+export const ShopPanel = memo(ShopPanelImpl);

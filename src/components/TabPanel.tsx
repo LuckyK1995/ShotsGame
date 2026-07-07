@@ -1,3 +1,5 @@
+import { neonCyan, neonPurple, neonPink, neonBlue, neonRed } from '../theme/colors';
+
 interface Tab {
   id: string;
   icon: string;
@@ -13,11 +15,7 @@ interface TabPanelProps {
 }
 
 export function TabPanel({ tabs, activeTab, onTabChange, onClose, children }: TabPanelProps) {
-  const neonCyan = '#00F5D4';
-  const neonPurple = '#B026FF';
-  const neonPink = '#FF0080';
-  const neonBlue = '#4FACFE';
-  const neonRed = '#FF3B3B';
+  // neon 颜色已移至 theme/colors
 
   const tabColors: Record<string, { active: string; inactive: string; icon: string }> = {
     equipment: { active: neonCyan, inactive: '#5A5A7A', icon: neonCyan },

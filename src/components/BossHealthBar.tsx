@@ -1,3 +1,4 @@
+import { memo } from 'react';
 import { useGameStore } from '../store/gameStore';
 
 // 14条血颜色：红橙黄绿青蓝紫 × 2
@@ -19,8 +20,9 @@ const BOSS_BLOOD_COLORS = [
   '#FF3333', // 红 (1/14 最后一条)
 ];
 
-export function BossHealthBar() {
-  const { gameState } = useGameStore();
+function BossHealthBarImpl() {
+  // 性能优化：使用细粒度 selector，仅订阅 gameState
+  const gameState = useGameStore(s => s.gameState);
 
   if (!gameState || !gameState.bossActive) return null;
 
@@ -104,3 +106,6 @@ export function BossHealthBar() {
     </div>
   );
 }
+
+// 性能优化：memo 包装，无 props 时浅比较生效
+export const BossHealthBar = memo(BossHealthBarImpl);
