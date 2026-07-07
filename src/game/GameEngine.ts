@@ -64,6 +64,8 @@ import {
   INITIAL_ENCHANT_INVENTORY,
 } from './data/enchantItems';
 import type { EnchantItemId, EnchantStat } from './data/enchantItems';
+import type { GameMode, DifficultyLevel, MaterialDungeonType } from './data/gameModes';
+import { GAME_MODE_CONFIGS, MATERIAL_DUNGEONS, DIFFICULTY_CONFIG } from './data/gameModes';
 
 export class GameEngine {
   canvas: HTMLCanvasElement;
@@ -72,6 +74,28 @@ export class GameEngine {
 
   player: Player;
   gameState: GameState;
+
+  // 游戏模式相关
+  gameMode: GameMode = 'stage';
+  modeDifficulty: DifficultyLevel = 'normal';
+  modeDungeonType: MaterialDungeonType = 'enhance';
+  modeTimeLimit: number = 0;
+  modeTimeRemaining: number = 0;
+  modeBaseHealth: number = 0;
+  modeBaseDamage: number = 0;
+  modeVictory: boolean = false;
+  modeFailed: boolean = false;
+  modeScore: number = 0;
+  modeData: Record<string, any> = {};
+
+  // 守卫战相关
+  guardBaseHealth: number = 100;
+  guardBaseMaxHealth: number = 100;
+
+  // 家园守卫相关
+  homeBaseHealth: number = 500;
+  homeBaseMaxHealth: number = 500;
+  homeTowers: Array<{ x: number; y: number; type: string; damage: number; cooldown: number; lastShot: number }> = [];
 
   bulletPool: ObjectPool<Bullet>;
   enemyPool: ObjectPool<Enemy>;
@@ -110,6 +134,11 @@ export class GameEngine {
 
   private manualShootCooldown: number = 0;
   private autoShootTimer: number = 0;
+
+  // 手动瞄准准星位置（世界坐标）
+  private aimX: number = 0;
+  private aimY: number = 0;
+  private hasAim: boolean = false;
 
   private magnetActive: boolean = false;
   private shieldActive: boolean = false;
@@ -1334,8 +1363,541 @@ expToNextLevel: Math.floor(10 + Math.pow(bs.level, 1.7) * 4 + bs.level * 4),
     this.lastTime = performance.now();
     this.rebuildBackgroundCache();
     this.rebuildCloneSprite();
+    this.initMode();
     this.startWave();
     this.gameLoop();
+  }
+
+  setGameMode(mode: GameMode, difficulty: DifficultyLevel = 'normal', dungeonType: MaterialDungeonType = 'enhance'): void {
+    this.gameMode = mode;
+    this.modeDifficulty = difficulty;
+    this.modeDungeonType = dungeonType;
+  }
+
+  restartWithMode(mode: GameMode, difficulty: DifficultyLevel = 'normal', dungeonType: MaterialDungeonType = 'enhance'): void {
+    this.setGameMode(mode, difficulty, dungeonType);
+    this.resetGameForMode();
+    this.start();
+  }
+
+  private resetGameForMode(): void {
+    this.stop();
+    this.player.health = this.player.maxHealth;
+    this.gameState.isGameOver = false;
+    this.gameState.isPaused = false;
+    this.gameState.bossActive = false;
+    this.gameState.bossHealth = 0;
+    this.gameState.bossMaxHealth = 0;
+    this.gameState.bossName = '';
+    this.gameState.currentWave = 0;
+    this.gameState.betweenWaves = true;
+    this.gameState.betweenWaveTimer = 3000;
+    this.gameState.waveEnemiesSpawned = 0;
+    this.gameState.waveEnemiesRemaining = 0;
+    this.gameState.waveEnemiesTotal = 0;
+
+    for (const enemy of this.enemyPool.getActive()) {
+      this.enemyPool.release(enemy);
+    }
+    for (const bullet of this.bulletPool.getActive()) {
+      this.bulletPool.release(bullet);
+    }
+    for (const drop of this.dropPool.getActive()) {
+      this.dropPool.release(drop);
+    }
+    for (const particle of this.particlePool.getActive()) {
+      this.particlePool.release(particle);
+    }
+    for (const dn of this.damageNumberPool.getActive()) {
+      this.damageNumberPool.release(dn);
+    }
+    this.weatherParticles = [];
+    this.weather.type = 'clear';
+    this.weather.intensity = 0;
+    this.buffs = [];
+    this.playerDebuffs = [];
+    this.modeVictory = false;
+    this.modeFailed = false;
+    this.modeScore = 0;
+  }
+
+  private initMode(): void {
+    this.modeVictory = false;
+    this.modeFailed = false;
+    this.modeScore = 0;
+    this.modeTimeRemaining = this.modeTimeLimit;
+    this.modeData = {};
+
+    switch (this.gameMode) {
+      case 'worldboss':
+        this.initWorldBossMode();
+        break;
+      case 'purgatory':
+        this.initPurgatoryMode();
+        break;
+      case 'daily':
+        this.initDailyMode();
+        break;
+      case 'material':
+        this.initMaterialMode();
+        break;
+      case 'mirror':
+        this.initMirrorMode();
+        break;
+      case 'guard':
+        this.initGuardMode();
+        break;
+      case 'homedefense':
+        this.initHomeDefenseMode();
+        break;
+      case 'stage':
+      default:
+        break;
+    }
+  }
+
+  private initWorldBossMode(): void {
+    this.modeTimeLimit = 5 * 60 * 1000;
+    this.modeTimeRemaining = this.modeTimeLimit;
+    this.gameState.betweenWaves = false;
+    this.gameState.waveInterval = 0;
+    this.gameState.betweenWaveTimer = 0;
+    this.gameState.currentWave = 1;
+    this.gameState.waveEnemiesSpawned = 1;
+    this.gameState.waveEnemiesRemaining = 1;
+    this.gameState.waveEnemiesTotal = 1;
+    this.spawnWorldBoss();
+  }
+
+  private spawnWorldBoss(): void {
+    const diffMult = DIFFICULTY_CONFIG[this.modeDifficulty].enemyMult;
+    const boss = this.enemyPool.acquire('mutant', 1) as Enemy;
+    const playerLevel = this.player.level;
+
+    boss.name = '世界BOSS·毁灭者';
+    boss.type = 'boss';
+    boss.isBoss = true;
+    boss.width = 200;
+    boss.height = 220;
+    boss.maxHealth = Math.floor(50000000 * Math.pow(1.15, playerLevel) * diffMult);
+    boss.health = boss.maxHealth;
+    boss.baseSpeed = 0.8;
+    boss.speed = 0.8;
+    boss.damage = Math.floor(20 + playerLevel * 5 * diffMult);
+    boss.exp = 0;
+    boss.dropRate = 1;
+    boss.color = '#E74C3C';
+    boss.x = this.config.canvasWidth - 250;
+    boss.y = this.config.groundY + 40;
+    boss.attack = Math.floor(50 + playerLevel * 10 * diffMult);
+    boss.attackSpeed = 1500;
+    boss.critRate = 10;
+    boss.critDamage = 150;
+    boss.defense = Math.min(60, 20 + playerLevel * 0.5);
+    boss.range = 400;
+    boss.bossMaxPhase = 3;
+    boss.bossPhase = 0;
+    boss.bossSkillCooldown = 3000;
+    (boss as any).isWorldBoss = true;
+    (boss as any).shootCooldown = boss.attackSpeed;
+    (boss as any).specialCooldown = 5000;
+    (boss as any).chargeCooldown = 8000;
+    (boss as any).isCharging = false;
+    (boss as any).chargeTimer = 0;
+
+    this.gameState.bossActive = true;
+    this.gameState.bossHealth = boss.health;
+    this.gameState.bossMaxHealth = boss.maxHealth;
+    this.gameState.bossName = boss.name;
+    this.gameState.eliteBossNoticeType = 'boss';
+    this.gameState.showEliteBossNotice = true;
+    this.gameState.eliteBossNoticeTimer = 3000;
+  }
+
+  private initPurgatoryMode(): void {
+    this.modeData.purgatoryDebuff = null;
+    this.modeData.purgatoryDebuffTimer = 0;
+    this.modeData.purgatoryWaveBonus = 2;
+  }
+
+  private initDailyMode(): void {
+    this.modeTimeLimit = 3 * 60 * 1000;
+    this.modeTimeRemaining = this.modeTimeLimit;
+    this.modeData.dailyKillCount = 0;
+    this.modeData.dailyTarget = 50;
+    this.modeData.dailyTaskType = 'kill_count';
+    this.modeData.dailyStartKills = this.totalKills;
+  }
+
+  private initMaterialMode(): void {
+    this.modeTimeLimit = 2 * 60 * 1000;
+    this.modeTimeRemaining = this.modeTimeLimit;
+    this.modeData.materialDrops = [];
+    this.modeData.materialStartKills = this.totalKills;
+  }
+
+  private initMirrorMode(): void {
+    this.modeTimeLimit = 3 * 60 * 1000;
+    this.modeTimeRemaining = this.modeTimeLimit;
+    this.gameState.betweenWaves = false;
+    this.gameState.waveInterval = 0;
+    this.gameState.betweenWaveTimer = 0;
+    this.gameState.currentWave = 1;
+    this.gameState.waveEnemiesSpawned = 1;
+    this.gameState.waveEnemiesRemaining = 1;
+    this.gameState.waveEnemiesTotal = 1;
+    this.spawnMirrorEnemy();
+  }
+
+  private spawnMirrorEnemy(): void {
+    const diffMult = DIFFICULTY_CONFIG[this.modeDifficulty].enemyMult;
+    const mirror = this.enemyPool.acquire('mutant', 1) as Enemy;
+
+    mirror.name = '镜像战士';
+    mirror.type = 'boss';
+    mirror.isBoss = true;
+    mirror.width = 24;
+    mirror.height = 48;
+    mirror.maxHealth = Math.floor(this.player.maxHealth * diffMult);
+    mirror.health = mirror.maxHealth;
+    mirror.baseSpeed = 2.5;
+    mirror.speed = 2.5;
+    mirror.damage = Math.floor(this.player.attack * 0.3 * diffMult);
+    mirror.exp = 0;
+    mirror.dropRate = 0;
+    mirror.color = '#9B59B6';
+    mirror.x = this.config.canvasWidth - 100;
+    mirror.y = this.player.y;
+    mirror.attack = Math.floor(this.player.attack * diffMult);
+    mirror.attackSpeed = this.player.attackSpeed;
+    mirror.critRate = (this.player as any).critRate || 5;
+    mirror.critDamage = (this.player as any).critDamage || 150;
+    mirror.defense = (this.player as any).defense || 0;
+    mirror.range = (this.player as any).range || 300;
+    (mirror as any).isMirror = true;
+    (mirror as any).shootCooldown = mirror.attackSpeed;
+    (mirror as any).mirrorAnimFrame = 0;
+
+    this.gameState.bossActive = true;
+    this.gameState.bossHealth = mirror.health;
+    this.gameState.bossMaxHealth = mirror.maxHealth;
+    this.gameState.bossName = mirror.name;
+    this.gameState.eliteBossNoticeType = 'boss';
+    this.gameState.showEliteBossNotice = true;
+    this.gameState.eliteBossNoticeTimer = 2000;
+  }
+
+  private initGuardMode(): void {
+    this.guardBaseMaxHealth = 500 + this.player.level * 20;
+    this.guardBaseHealth = this.guardBaseMaxHealth;
+  }
+
+  private initHomeDefenseMode(): void {
+    this.homeBaseMaxHealth = 1000 + this.player.level * 50;
+    this.homeBaseHealth = this.homeBaseMaxHealth;
+    this.homeTowers = [
+      { x: 60, y: this.config.groundY + 80, type: 'cannon', damage: 15 + this.player.level * 2, cooldown: 1500, lastShot: 0 },
+      { x: 60, y: this.config.groundY + 160, type: 'cannon', damage: 15 + this.player.level * 2, cooldown: 1500, lastShot: 750 },
+    ];
+  }
+
+  private updateMode(dt: number): void {
+    if (this.gameMode === 'stage') return;
+    if (this.gameState.isGameOver || this.modeVictory || this.modeFailed) return;
+
+    if (this.modeTimeLimit > 0) {
+      this.modeTimeRemaining -= dt * 1000;
+      if (this.modeTimeRemaining <= 0) {
+        this.modeTimeRemaining = 0;
+        this.onModeTimeUp();
+      }
+    }
+
+    switch (this.gameMode) {
+      case 'worldboss':
+        this.updateWorldBossMode(dt);
+        break;
+      case 'purgatory':
+        this.updatePurgatoryMode(dt);
+        break;
+      case 'daily':
+        this.updateDailyMode(dt);
+        break;
+      case 'material':
+        this.updateMaterialMode(dt);
+        break;
+      case 'mirror':
+        this.updateMirrorMode(dt);
+        break;
+      case 'guard':
+        this.updateGuardMode(dt);
+        break;
+      case 'homedefense':
+        this.updateHomeDefenseMode(dt);
+        break;
+    }
+  }
+
+  private onModeTimeUp(): void {
+    switch (this.gameMode) {
+      case 'worldboss':
+        this.modeFailed = true;
+        this.gameState.isGameOver = true;
+        break;
+      case 'daily':
+      case 'material':
+        this.modeVictory = true;
+        this.gameState.isGameOver = true;
+        break;
+      case 'mirror':
+        this.modeFailed = true;
+        this.gameState.isGameOver = true;
+        break;
+      default:
+        break;
+    }
+  }
+
+  private updateWorldBossMode(dt: number): void {
+    const dtMs = dt * 1000;
+    const enemies = this.enemyPool.getActive();
+    const boss = enemies.find(e => (e as any).isWorldBoss);
+
+    if (!boss || boss.health <= 0) {
+      this.modeVictory = true;
+      this.gameState.isGameOver = true;
+      return;
+    }
+
+    this.gameState.bossHealth = boss.health;
+
+    const healthPercent = boss.health / boss.maxHealth;
+    if (healthPercent <= 0.33 && boss.bossPhase < 3) {
+      boss.bossPhase = 3;
+      boss.attackSpeed = Math.floor(boss.attackSpeed * 0.6);
+      boss.speed = boss.baseSpeed * 1.5;
+    } else if (healthPercent <= 0.66 && boss.bossPhase < 2) {
+      boss.bossPhase = 2;
+      boss.attackSpeed = Math.floor(boss.attackSpeed * 0.75);
+      boss.speed = boss.baseSpeed * 1.2;
+    } else if (healthPercent <= 0.9 && boss.bossPhase < 1) {
+      boss.bossPhase = 1;
+    }
+
+    (boss as any).shootCooldown -= dtMs;
+    if ((boss as any).shootCooldown <= 0) {
+      this.worldBossShoot(boss);
+      (boss as any).shootCooldown = boss.attackSpeed;
+    }
+
+    (boss as any).specialCooldown -= dtMs;
+    if ((boss as any).specialCooldown <= 0) {
+      this.worldBossSpecialAttack(boss);
+      (boss as any).specialCooldown = 5000 + Math.random() * 3000;
+    }
+
+    (boss as any).chargeCooldown -= dtMs;
+    if ((boss as any).chargeCooldown <= 0 && !(boss as any).isCharging) {
+      (boss as any).isCharging = true;
+      (boss as any).chargeTimer = 1500;
+      (boss as any).chargeDir = this.player.y < boss.y + boss.height / 2 ? -1 : 1;
+    }
+
+    if ((boss as any).isCharging) {
+      (boss as any).chargeTimer -= dtMs;
+      boss.y += 6 * (boss as any).chargeDir;
+      if ((boss as any).chargeTimer <= 0) {
+        (boss as any).isCharging = false;
+        (boss as any).chargeCooldown = 10000 + Math.random() * 5000;
+      }
+    } else {
+      const playerCy = this.player.y + this.player.height / 2;
+      const bossCy = boss.y + boss.height / 2;
+      if (Math.abs(playerCy - bossCy) > 30) {
+        boss.y += boss.speed * 0.5 * (bossCy > playerCy ? -1 : 1);
+      }
+    }
+
+    boss.y = Math.max(this.config.groundY + 10, Math.min(this.config.canvasHeight - boss.height - 10, boss.y));
+  }
+
+  private worldBossShoot(boss: Enemy): void {
+    const bulletX = boss.x;
+    const bulletY = boss.y + boss.height / 2;
+    const angle = Math.atan2(
+      this.player.y + this.player.height / 2 - bulletY,
+      this.player.x + this.player.width / 2 - bulletX
+    );
+
+    const spreadCount = boss.bossPhase >= 2 ? 5 : 3;
+    const spreadAngle = 0.15;
+    for (let i = 0; i < spreadCount; i++) {
+      const offset = (i - Math.floor(spreadCount / 2)) * spreadAngle;
+      const bullet = this.bulletPool.acquire(bulletX, bulletY + (i - Math.floor(spreadCount / 2)) * 8, boss.damage) as Bullet;
+      (bullet as any).angle = angle + offset;
+      (bullet as any).speed = 180;
+      (bullet as any).isEnemyBullet = true;
+      bullet.trailColor = '#FF4757';
+      bullet.element = 'physical';
+      bullet.width = 8;
+      bullet.height = 8;
+    }
+  }
+
+  private worldBossSpecialAttack(boss: Enemy): void {
+    const bulletX = boss.x;
+    const bulletY = boss.y + boss.height / 2;
+
+    const count = 12 + boss.bossPhase * 4;
+    for (let i = 0; i < count; i++) {
+      const angle = (Math.PI * 2 * i) / count + Math.random() * 0.1;
+      const bullet = this.bulletPool.acquire(bulletX, bulletY, Math.floor(boss.damage * 0.5)) as Bullet;
+      (bullet as any).angle = angle;
+      (bullet as any).speed = 150 + Math.random() * 50;
+      (bullet as any).isEnemyBullet = true;
+      bullet.trailColor = '#FF6B81';
+      bullet.element = 'fire';
+      bullet.width = 6;
+      bullet.height = 6;
+    }
+  }
+
+  private updatePurgatoryMode(dt: number): void {
+    const wave = this.gameState.currentWave;
+    if (wave > 0 && wave % 5 === 0 && this.gameState.betweenWaves) {
+      const debuffs = ['attackSpeedDown', 'burn', 'poison', 'freeze'];
+      const debuff = debuffs[Math.floor(Math.random() * debuffs.length)];
+      this.modeData.purgatoryDebuff = debuff;
+    }
+  }
+
+  private updateDailyMode(dt: number): void {
+    const killCount = this.totalKills - (this.modeData.dailyStartKills || 0);
+    this.modeData.dailyKillCount = killCount;
+    this.modeScore = killCount;
+
+    if (killCount >= this.modeData.dailyTarget) {
+      this.modeVictory = true;
+      this.gameState.isGameOver = true;
+    }
+  }
+
+  private updateMaterialMode(dt: number): void {
+    this.modeData.materialKillCount = this.totalKills - (this.modeData.materialStartKills || 0);
+  }
+
+  private updateMirrorMode(dt: number): void {
+    const dtMs = dt * 1000;
+    const enemies = this.enemyPool.getActive();
+    const mirror = enemies.find(e => (e as any).isMirror);
+
+    if (!mirror || mirror.health <= 0) {
+      this.modeVictory = true;
+      this.gameState.isGameOver = true;
+      return;
+    }
+
+    this.gameState.bossHealth = mirror.health;
+
+    (mirror as any).shootCooldown -= dtMs;
+    if ((mirror as any).shootCooldown <= 0) {
+      this.mirrorShoot(mirror);
+      (mirror as any).shootCooldown = mirror.attackSpeed;
+    }
+
+    const playerCx = this.player.x + this.player.width / 2;
+    const mirrorCx = mirror.x + mirror.width / 2;
+    const targetDist = 180;
+    if (Math.abs(playerCx - mirrorCx) > targetDist + 20) {
+      mirror.x -= mirror.speed * (mirrorCx > playerCx ? 1 : -1);
+    } else if (Math.abs(playerCx - mirrorCx) < targetDist - 20) {
+      mirror.x += mirror.speed * (mirrorCx > playerCx ? 1 : -1);
+    }
+
+    const playerCy = this.player.y + this.player.height / 2;
+    const mirrorCy = mirror.y + mirror.height / 2;
+    if (Math.abs(playerCy - mirrorCy) > 5) {
+      mirror.y += mirror.speed * 0.5 * (mirrorCy > playerCy ? -1 : 1);
+    }
+
+    mirror.x = Math.max(this.config.canvasWidth * 0.3, Math.min(this.config.canvasWidth - 50, mirror.x));
+    mirror.y = Math.max(this.config.groundY + 10, Math.min(this.config.canvasHeight - 60, mirror.y));
+
+    (mirror as any).mirrorAnimFrame++;
+  }
+
+  private mirrorShoot(mirror: Enemy): void {
+    const bulletX = mirror.x;
+    const bulletY = mirror.y + mirror.height / 2;
+    const angle = Math.atan2(
+      this.player.y + this.player.height / 2 - bulletY,
+      this.player.x + this.player.width / 2 - bulletX
+    );
+
+    const bullet = this.bulletPool.acquire(bulletX, bulletY, mirror.damage) as Bullet;
+    (bullet as any).angle = angle;
+    (bullet as any).speed = 200;
+    (bullet as any).isEnemyBullet = true;
+    bullet.trailColor = '#FF6B6B';
+    bullet.element = 'physical';
+  }
+
+  private updateGuardMode(dt: number): void {
+    const enemies = this.enemyPool.getActive();
+    const baseX = 30;
+
+    for (const enemy of enemies) {
+      if (enemy.x <= baseX + 40 && enemy.active) {
+        const dmgPerSec = enemy.damage * 2;
+        this.guardBaseHealth -= dmgPerSec * dt;
+
+        if (this.guardBaseHealth <= 0) {
+          this.guardBaseHealth = 0;
+          this.modeFailed = true;
+          this.gameState.isGameOver = true;
+          return;
+        }
+      }
+    }
+  }
+
+  private updateHomeDefenseMode(dt: number): void {
+    const enemies = this.enemyPool.getActive();
+    const baseX = 20;
+
+    for (const enemy of enemies) {
+      if (enemy.x <= baseX + 30 && enemy.active) {
+        const dmgPerSec = enemy.damage * 1.5;
+        this.homeBaseHealth -= dmgPerSec * dt;
+
+        if (this.homeBaseHealth <= 0) {
+          this.homeBaseHealth = 0;
+          this.modeFailed = true;
+          this.gameState.isGameOver = true;
+          return;
+        }
+      }
+    }
+  }
+
+  private updateHomeTowers(dt: number): void {
+    if (this.gameMode !== 'homedefense') return;
+    for (const tower of this.homeTowers) {
+      tower.lastShot -= dt * 1000;
+      if (tower.lastShot <= 0) {
+        const enemies = this.getSortedRightEnemies(tower.x);
+        if (enemies.length > 0) {
+          const target = enemies[0];
+          const angle = Math.atan2(target.y + target.height / 2 - tower.y, target.x + target.width / 2 - tower.x);
+          const bullet = this.bulletPool.acquire(tower.x, tower.y, tower.damage) as Bullet;
+          (bullet as any).angle = angle;
+          (bullet as any).speed = 250;
+          (bullet as any).isTowerBullet = true;
+          bullet.trailColor = '#FFD700';
+          tower.lastShot = tower.cooldown;
+        }
+      }
+    }
   }
 
   stop(): void {
@@ -1466,6 +2028,7 @@ expToNextLevel: Math.floor(10 + Math.pow(bs.level, 1.7) * 4 + bs.level * 4),
     this.updateBuffs(dt);
     this.updateSkills(dt);
     this.updateActiveSkills(dt);
+    this.updateMode(dt);
     this.updateWave(dt);
     this.updateShooting(dt);
     this.updateBullets(dt);
@@ -1480,6 +2043,7 @@ expToNextLevel: Math.floor(10 + Math.pow(bs.level, 1.7) * 4 + bs.level * 4),
     this.updateDodge(dt);
     this.updateDrone(dt);
     this.updateClones(dt);
+    this.updateHomeTowers(dt);
 
     // 更新剩余怪物数
     this.gameState.waveEnemiesRemaining = this.getWaveRemainingCount();
@@ -2795,6 +3359,12 @@ expToNextLevel: Math.floor(10 + Math.pow(bs.level, 1.7) * 4 + bs.level * 4),
     }
   }
 
+  setAimPosition(x: number, y: number): void {
+    this.aimX = x;
+    this.aimY = y;
+    this.hasAim = true;
+  }
+
   manualShoot(): void {
     // 需求 #8：定身时无法手动射击
     if (this.isPlayerStunned()) return;
@@ -2808,12 +3378,12 @@ expToNextLevel: Math.floor(10 + Math.pow(bs.level, 1.7) * 4 + bs.level * 4),
       // 需求 #8：攻速受debuff影响
       const atkSpeedDebuffMult = this.getPlayerDebuffMultiplier('attackSpeedDown');
       const effectiveManualSpeed = Math.max(400, this.player.manualAttackSpeed * (1 - attackSpeedBonus) / weatherAttackSpeedMult / atkSpeedDebuffMult);
-      this.shoot();
+      this.shoot(true); // true = 手动发射，使用准星瞄准
       this.manualShootCooldown = effectiveManualSpeed;
     }
   }
 
-  private shoot(): void {
+  private shoot(isManual: boolean = false): void {
     if (this.bulletPool.getActive().length >= 120) return;
     const attackBonus = this.getBuffValue('attack') / 100;
     const damage = Math.floor(this.player.attack * (1 + attackBonus));
@@ -2836,12 +3406,23 @@ expToNextLevel: Math.floor(10 + Math.pow(bs.level, 1.7) * 4 + bs.level * 4),
       return Math.atan2(targetY - baseY, targetEnemy.x - baseX);
     };
 
-    const sortedEnemies = this.getSortedRightEnemies(this.player.x);
-    // 同步发射：满级3颗分别打最近3名敌人
-    const targetCount = Math.min(1 + fxSyncLvl, sortedEnemies.length);
-    const targets: Enemy[] = [];
-    for (let i = 0; i < targetCount; i++) {
-      targets.push(sortedEnemies[i]);
+    // 手动发射：朝着准星位置发射
+    // 自动发射：锁定最近的怪物
+    let targets: Enemy[] = [];
+    let aimAngle = 0;
+
+    if (isManual && this.hasAim) {
+      // 手动模式：朝着准星方向发射
+      aimAngle = Math.atan2(this.aimY - bulletY, this.aimX - bulletX);
+      // 手动模式也需要targets数组（用于连发），但我们用一个虚拟的"目标角度"
+    } else {
+      // 自动模式：锁定最近的敌人
+      const sortedEnemies = this.getSortedRightEnemies(this.player.x);
+      // 同步发射：满级3颗分别打最近3名敌人
+      const targetCount = Math.min(1 + fxSyncLvl, sortedEnemies.length);
+      for (let i = 0; i < targetCount; i++) {
+        targets.push(sortedEnemies[i]);
+      }
     }
 
     const baseSpeed = 500 * this.getPlayerDebuffMultiplier('bulletSpeedDown');
@@ -2946,18 +3527,29 @@ expToNextLevel: Math.floor(10 + Math.pow(bs.level, 1.7) * 4 + bs.level * 4),
       const spreadAngle = spreadPerTarget > 1 ? 0.12 : 0;
       const halfSpread = Math.floor(spreadPerTarget / 2);
 
-      for (const target of targets) {
-        if (bulletAnyCtx.bulletPool.getActive().length >= 120) break;
-        const angle = getTargetAngle(target, bulletY, bulletX);
+      if (isManual && this.hasAim) {
+        // 手动模式：朝着准星方向发射
         for (let s = -halfSpread; s <= halfSpread; s++) {
           if (bulletAnyCtx.bulletPool.getActive().length >= 120) break;
           const bullet = bulletAnyCtx.bulletPool.acquire(bulletX, bulletY + s * 3, damage) as Bullet;
-          (bullet as any).angle = angle + s * spreadAngle;
+          (bullet as any).angle = aimAngle + s * spreadAngle;
         }
+        tryFireSpecialBullets(aimAngle);
+      } else {
+        // 自动模式：锁定敌人
+        for (const target of targets) {
+          if (bulletAnyCtx.bulletPool.getActive().length >= 120) break;
+          const angle = getTargetAngle(target, bulletY, bulletX);
+          for (let s = -halfSpread; s <= halfSpread; s++) {
+            if (bulletAnyCtx.bulletPool.getActive().length >= 120) break;
+            const bullet = bulletAnyCtx.bulletPool.acquire(bulletX, bulletY + s * 3, damage) as Bullet;
+            (bullet as any).angle = angle + s * spreadAngle;
+          }
+        }
+        // 特效子弹只跟随主目标角度
+        const mainAngle = getTargetAngle(targets[0], bulletY, bulletX);
+        tryFireSpecialBullets(mainAngle);
       }
-      // 特效子弹只跟随主目标角度
-      const mainAngle = getTargetAngle(targets[0], bulletY, bulletX);
-      tryFireSpecialBullets(mainAngle);
     };
 
     // 第一轮立即发射
@@ -2970,7 +3562,11 @@ expToNextLevel: Math.floor(10 + Math.pow(bs.level, 1.7) * 4 + bs.level * 4),
     if (burstShots > 0) {
       this.burstRemaining = burstShots;
       this.burstTimer = 120;
-      this.burstAngles = targets.map(t => getTargetAngle(t, bulletY, bulletX));
+      if (isManual && this.hasAim) {
+        this.burstAngles = [aimAngle];
+      } else {
+        this.burstAngles = targets.map(t => getTargetAngle(t, bulletY, bulletX));
+      }
     }
 
     this.screenShake = 2;
@@ -3925,6 +4521,9 @@ expToNextLevel: Math.floor(10 + Math.pow(bs.level, 1.7) * 4 + bs.level * 4),
     const enemies = this.enemyPool.getActive();
     const bulletPierceCount = (this.player as any).bulletPierceCount || 0;
 
+    // 敌方子弹与玩家碰撞检测
+    this.checkEnemyBulletCollisions();
+
     // 构建空间网格
     this.buildEnemyGrid();
 
@@ -4071,6 +4670,37 @@ expToNextLevel: Math.floor(10 + Math.pow(bs.level, 1.7) * 4 + bs.level * 4),
             }
           }
         }
+      }
+    }
+  }
+
+  private checkEnemyBulletCollisions(): void {
+    const bullets = this.bulletPool.getActive();
+    const playerInvincible = this.shieldActive || this.player.invincibleTimer > 0 || this.player.isDodging;
+    if (playerInvincible) return;
+
+    const px = this.player.x;
+    const py = this.player.y;
+    const pw = this.player.width;
+    const ph = this.player.height;
+
+    for (const bullet of bullets) {
+      if (!bullet.active) continue;
+      const bulletAny = bullet as any;
+      if (!bulletAny.isEnemyBullet && !bulletAny.isEnemyProjectile) continue;
+      if (bulletAny.isTowerBullet) continue;
+
+      const bx = bullet.x - bullet.width / 2;
+      const by = bullet.y - bullet.height / 2;
+
+      if (bx < px + pw && bx + bullet.width > px &&
+          by < py + ph && by + bullet.height > py) {
+        const defense = (this.player as any).defense || 0;
+        const reducedDamage = Math.max(1, bullet.damage * (1 - defense / 100));
+        this.player.health -= reducedDamage;
+        this.bulletPool.release(bullet);
+
+        this.screenShake = Math.max(this.screenShake, 3);
       }
     }
   }
@@ -6209,10 +6839,12 @@ expToNextLevel: Math.floor(10 + Math.pow(bs.level, 1.7) * 4 + bs.level * 4),
     }
     this.renderBullets();
     this.renderEnemies();
+    this.renderModeObjects();
     this.renderParticles();
     this.renderDamageNumbers();
     this.renderLaser();
     this.renderFlashLightning();
+    this.renderCrosshair();
 
     if (this.shieldActive || this.player.invincibleTimer > 0) {
       this.renderShield();
@@ -10508,6 +11140,172 @@ expToNextLevel: Math.floor(10 + Math.pow(bs.level, 1.7) * 4 + bs.level * 4),
       ctx.fillStyle = `rgba(255, 255, 255, ${0.8 - progress * 0.5})`;
       ctx.beginPath();
       ctx.arc(ex, enemy.y, 4 + progress * 6, 0, Math.PI * 2);
+      ctx.fill();
+
+      ctx.restore();
+    }
+  }
+
+  private renderCrosshair(): void {
+    if (!this.hasAim) return;
+
+    const ctx = this.ctx;
+    const x = this.aimX;
+    const y = this.aimY;
+    const size = 18;
+    const gap = 4;
+
+    ctx.save();
+    ctx.strokeStyle = '#00F5D4';
+    ctx.shadowColor = '#00F5D4';
+    ctx.shadowBlur = 8;
+    ctx.lineWidth = 2;
+
+    // 十字准星
+    ctx.beginPath();
+    // 上
+    ctx.moveTo(x, y - size);
+    ctx.lineTo(x, y - gap);
+    // 下
+    ctx.moveTo(x, y + gap);
+    ctx.lineTo(x, y + size);
+    // 左
+    ctx.moveTo(x - size, y);
+    ctx.lineTo(x - gap, y);
+    // 右
+    ctx.moveTo(x + gap, y);
+    ctx.lineTo(x + size, y);
+    ctx.stroke();
+
+    // 中心点
+    ctx.fillStyle = '#00F5D4';
+    ctx.beginPath();
+    ctx.arc(x, y, 2, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.restore();
+  }
+
+  private renderModeObjects(): void {
+    switch (this.gameMode) {
+      case 'guard':
+        this.renderGuardBase();
+        break;
+      case 'homedefense':
+        this.renderHomeBase();
+        this.renderHomeTowers();
+        break;
+      default:
+        break;
+    }
+  }
+
+  private renderGuardBase(): void {
+    const ctx = this.ctx;
+    const baseX = 10;
+    const baseY = this.config.groundY - 10;
+    const baseW = 40;
+    const baseH = 280;
+
+    ctx.save();
+
+    const healthPercent = this.guardBaseHealth / this.guardBaseMaxHealth;
+    const baseColor = healthPercent > 0.5 ? '#3498DB' : healthPercent > 0.25 ? '#F39C12' : '#E74C3C';
+
+    ctx.fillStyle = '#2C3E50';
+    ctx.fillRect(baseX, baseY, baseW, baseH);
+
+    ctx.strokeStyle = baseColor;
+    ctx.lineWidth = 2;
+    ctx.shadowColor = baseColor;
+    ctx.shadowBlur = 8;
+    ctx.strokeRect(baseX, baseY, baseW, baseH);
+
+    ctx.fillStyle = baseColor;
+    ctx.font = 'bold 10px monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText('基地', baseX + baseW / 2, baseY + 20);
+
+    const barW = 30;
+    const barH = 4;
+    const barX = baseX + (baseW - barW) / 2;
+    const barY = baseY + 30;
+
+    ctx.fillStyle = '#1A1A2E';
+    ctx.fillRect(barX, barY, barW, barH);
+
+    ctx.fillStyle = baseColor;
+    ctx.fillRect(barX, barY, barW * healthPercent, barH);
+
+    ctx.restore();
+  }
+
+  private renderHomeBase(): void {
+    const ctx = this.ctx;
+    const baseX = 5;
+    const baseY = this.config.groundY - 20;
+    const baseW = 50;
+    const baseH = 300;
+
+    ctx.save();
+
+    const healthPercent = this.homeBaseHealth / this.homeBaseMaxHealth;
+    const baseColor = healthPercent > 0.5 ? '#2ECC71' : healthPercent > 0.25 ? '#F39C12' : '#E74C3C';
+
+    ctx.fillStyle = '#1A1A2E';
+    ctx.fillRect(baseX, baseY, baseW, baseH);
+
+    ctx.strokeStyle = baseColor;
+    ctx.lineWidth = 2;
+    ctx.shadowColor = baseColor;
+    ctx.shadowBlur = 10;
+    ctx.strokeRect(baseX, baseY, baseW, baseH);
+
+    ctx.fillStyle = baseColor;
+    ctx.font = 'bold 9px monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText('家园', baseX + baseW / 2, baseY + 18);
+
+    for (let i = 0; i < 5; i++) {
+      const wy = baseY + 40 + i * 50;
+      ctx.fillStyle = '#34495E';
+      ctx.fillRect(baseX + 8, wy, 34, 35);
+      ctx.fillStyle = baseColor;
+      ctx.globalAlpha = 0.5 + Math.sin(this.animFrame * 0.05 + i) * 0.3;
+      ctx.fillRect(baseX + 12, wy + 5, 10, 10);
+      ctx.fillRect(baseX + 28, wy + 5, 10, 10);
+      ctx.globalAlpha = 1;
+    }
+
+    const barW = 40;
+    const barH = 5;
+    const barX = baseX + (baseW - barW) / 2;
+    const barY = baseY + baseH - 15;
+
+    ctx.fillStyle = '#1A1A2E';
+    ctx.fillRect(barX, barY, barW, barH);
+
+    ctx.fillStyle = baseColor;
+    ctx.fillRect(barX, barY, barW * healthPercent, barH);
+
+    ctx.restore();
+  }
+
+  private renderHomeTowers(): void {
+    const ctx = this.ctx;
+    for (const tower of this.homeTowers) {
+      ctx.save();
+
+      ctx.fillStyle = '#7F8C8D';
+      ctx.beginPath();
+      ctx.arc(tower.x, tower.y, 10, 0, Math.PI * 2);
+      ctx.fill();
+
+      ctx.fillStyle = '#FFD700';
+      ctx.shadowColor = '#FFD700';
+      ctx.shadowBlur = 6;
+      ctx.beginPath();
+      ctx.arc(tower.x, tower.y, 5, 0, Math.PI * 2);
       ctx.fill();
 
       ctx.restore();

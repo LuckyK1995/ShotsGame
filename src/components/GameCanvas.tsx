@@ -162,6 +162,19 @@ export const GameCanvas = forwardRef<GameCanvasHandle>((_, ref) => {
     const handleClick = (e: MouseEvent | TouchEvent) => {
       e.preventDefault();
       if (engineRef.current && !engineRef.current.gameState.isPaused) {
+        const canvas = canvasRef.current!;
+        const rect = canvas.getBoundingClientRect();
+        let clientX: number, clientY: number;
+        if ('touches' in e) {
+          clientX = e.touches[0].clientX;
+          clientY = e.touches[0].clientY;
+        } else {
+          clientX = e.clientX;
+          clientY = e.clientY;
+        }
+        const x = (clientX - rect.left) * (canvas.width / rect.width);
+        const y = (clientY - rect.top) * (canvas.height / rect.height);
+        engineRef.current.setAimPosition(x, y);
         engineRef.current.manualShoot();
       }
     };

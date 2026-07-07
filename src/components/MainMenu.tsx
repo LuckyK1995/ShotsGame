@@ -9,7 +9,7 @@ import {
 } from '../theme/colors';
 
 interface MainMenuProps {
-  onEnterStage: () => void;
+  onEnterStage: (mode: string) => void;
 }
 
 interface ModeButton {
@@ -23,13 +23,13 @@ interface ModeButton {
 
 const MODES: ModeButton[] = [
   { id: 'stage', label: '关卡挑战', desc: '挑战无尽波次', icon: StageIcon, color: neonGreen, unlocked: true },
-  { id: 'worldboss', label: '世界BOSS', desc: '集结讨伐强敌', icon: WorldBossIcon, color: neonRed, unlocked: false },
-  { id: 'purgatory', label: '炼狱', desc: '极限生存挑战', icon: PurgatoryIcon, color: neonOrange, unlocked: false },
-  { id: 'daily', label: '日常挑战', desc: '每日限定任务', icon: DailyIcon, color: neonYellow, unlocked: false },
-  { id: 'material', label: '材料副本', desc: '收集稀有材料', icon: MaterialIcon, color: neonPurple, unlocked: false },
-  { id: 'mirror', label: '镜像挑战', desc: '挑战自我镜像', icon: MirrorIcon, color: neonBlue, unlocked: false },
-  { id: 'guard', label: '守卫战', desc: '坚守阵地', icon: GuardIcon, color: neonCyan, unlocked: false },
-  { id: 'homedefense', label: '家园守卫', desc: '守护最后家园', icon: HomeDefenseIcon, color: neonGreen, unlocked: false },
+  { id: 'worldboss', label: '世界BOSS', desc: '集结讨伐强敌', icon: WorldBossIcon, color: neonRed, unlocked: true },
+  { id: 'purgatory', label: '炼狱', desc: '极限生存挑战', icon: PurgatoryIcon, color: neonOrange, unlocked: true },
+  { id: 'daily', label: '日常挑战', desc: '每日限定任务', icon: DailyIcon, color: neonYellow, unlocked: true },
+  { id: 'material', label: '材料副本', desc: '收集稀有材料', icon: MaterialIcon, color: neonPurple, unlocked: true },
+  { id: 'mirror', label: '镜像挑战', desc: '挑战自我镜像', icon: MirrorIcon, color: neonBlue, unlocked: true },
+  { id: 'guard', label: '守卫战', desc: '坚守阵地', icon: GuardIcon, color: neonCyan, unlocked: true },
+  { id: 'homedefense', label: '家园守卫', desc: '守护最后家园', icon: HomeDefenseIcon, color: neonGreen, unlocked: true },
 ];
 
 export function MainMenu({ onEnterStage }: MainMenuProps) {
@@ -44,7 +44,7 @@ export function MainMenu({ onEnterStage }: MainMenuProps) {
 
   const handleModeClick = (mode: ModeButton) => {
     if (mode.unlocked) {
-      onEnterStage();
+      onEnterStage(mode.id);
     } else {
       setToast(`【${mode.label}】即将开放，敬请期待`);
       setTimeout(() => setToast(null), 1800);

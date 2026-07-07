@@ -97,7 +97,10 @@ function App() {
     setView('menu');
   }, [closeAllPanels]);
 
-  const handleEnterStage = useCallback(() => {
+  const handleEnterStage = useCallback((mode: string) => {
+    if (gameCanvasRef.current?.engine) {
+      gameCanvasRef.current.engine.restartWithMode(mode as any);
+    }
     setView('battle');
   }, []);
 
