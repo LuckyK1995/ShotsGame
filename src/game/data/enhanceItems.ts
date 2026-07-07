@@ -79,10 +79,10 @@ export function getEnhanceItemDef(id: string): EnhanceItemDef | undefined {
 export const MAX_ENHANCE_LEVEL = 15;
 
 // 强化攻击力加成：累加值，如 +3 = 1+2+3 = 6 点攻击力，+7 = 1+2+...+7 = 28 点攻击力
-// 公式：n*(n+1)/2
+// 公式：n*(n+1)/2 * 0.35（平衡调整：削弱强化攻击加成，原公式无0.35系数）
 export function getEnhanceAttackBonus(enhanceLevel: number): number {
   if (enhanceLevel <= 0) return 0;
-  return (enhanceLevel * (enhanceLevel + 1)) / 2;
+  return Math.floor((enhanceLevel * (enhanceLevel + 1)) / 2 * 0.35);
 }
 
 // 强化成功率：1-3:100%，4-6：75%，7-9:50%，10-12：30%，13-15:10%

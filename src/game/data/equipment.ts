@@ -302,9 +302,9 @@ const SET_EQUIPMENT_NAMES: Record<SetBonusId, Record<EquipSlot, string>> = {
 };
 
 // 基础属性基础值（用于主属性生成）
-// 平衡调整：降低攻击基础值（5→3），减少前期装备攻击占比
+// 平衡调整：降低攻击基础值（5→3→1.35），削弱数值膨胀
 const BASE_STAT_VALUES: Record<string, number> = {
-  attack: 3,
+  attack: 1.35,
   health: 40,
   defense: 4,
   critRate: 1.5,
@@ -323,9 +323,9 @@ const STAT_TYPE_TO_FIELD: Record<string, string> = {
 };
 
 // 词条基础值
-// 平衡调整：降低攻击词条基础值（3.8→2.5）
+// 平衡调整：降低攻击词条基础值（3.8→2.5→1.125），削弱数值膨胀
 const AFFIX_BASE_VALUES: Record<string, number> = {
-  attack: 2.5,
+  attack: 1.125,
   attackSpeed: 4,
   health: 16,
   critRate: 1.2,
@@ -511,7 +511,8 @@ export const EQUIPMENT_TEMPLATES: Record<EquipSlot, { name: string }> = {
 
 export function createEquipment(slot: EquipSlot, rarity: EquipRarity, level: number): Equipment {
   const template = EQUIPMENT_TEMPLATES[slot];
-  return generateEquipment(template.name, slot, rarity, level);
+  const clampedLevel = Math.max(1, Math.min(level, 300));
+  return generateEquipment(template.name, slot, rarity, clampedLevel);
 }
 
 export const WEAPONS: Equipment[] = [
@@ -962,4 +963,103 @@ export function getEquipmentBonus(equipment: Equipment[]): Record<string, number
   });
 
   return bonus;
+}
+
+// 品质掉落权重函数 - 根据玩家等级限制品质并调整概率
+// 规则：
+// 1-50级：只能获取普通、高级品质
+// 51级开始：加入精致品质
+// 100级开始：加入传说品质（概率减半）
+// 150级开始：加入史诗品质（概率减半）
+// 200级开始：加入神话品质（概率减半）
+export function getRarityDropWeights(playerLevel: number): { rarities: EquipRarity[]; weights: number[] } {
+  const rarities: EquipRarity[] = [];
+  const weights: number[] = [];
+
+  // 普通品质：始终可用，概率随等级下降
+  const commonWeight = Math.max(30, 60 - Math.floor(playerLevel / 10));
+  rarities.push('common');
+  weights.push(commonWeight);
+
+  // 高级品质：始终可用，概率随等级下降
+  const advancedWeight = Math.max(25, 40 - Math.floor(playerLevel / 12));
+  rarities.push('advanced');
+  weights.push(advancedWeight);
+
+  // 精致品质：51级开始可用
+  if (playerLevel >= 51) {
+    const fineWeight = Math.max(8, 20 - Math.floor(playerLevel / 15));
+    rarities.push('fine');
+    weights.push(fineWeight);
+  }
+
+  // 传说品质：100级开始可用，概率减半
+  if (playerLevel >= 100) {
+    // 概率减半：原5% -> 2.5%，用权重表示为25
+    const legendaryWeight = 25;
+    rarities.push('legendary');
+    weights.push(legendaryWeight);
+  }
+
+  // 史诗品质：150级开始可用，概率减半
+  if (playerLevel >= 150) {
+    // 概率减半：原3% -> 1.5%，用权重表示为15
+    const epicWeight = 15;
+    rarities.push('epic');
+    weights.push(epicWeight);
+  }
+
+  // 神话品质：200级开始可用，概率减半
+  if (playerLevel >= 200) {
+    // 概率减半：原1% -> 0.5%，用权重表示为5
+    const mythicWeight = 5;
+    rarities.push('mythic');
+    weights.push(mythicWeight);
+  }
+
+  return { rarities, weights };
+}
+
+// 根据品质和玩家等级获取独立掉落概率（用于敌人掉落）
+// 小怪：独立判定，各品质概率较低
+// 精英：只爆高品质
+// BOSS：只爆最高品质
+export function getRarityDropChance(playerLevel: number, rarity: EquipRarity, enemyType: 'normal' | 'elite' | 'boss'): number {
+  // 先检查等级限制
+  if (playerLevel < 51 && rarity === 'fine') return 0;
+  if (playerLevel < 100 && rarity === 'legendary') return 0;
+  if (playerLevel < 150 && rarity === 'epic') return 0;
+  if (playerLevel < 200 && rarity === 'mythic') return 0;
+
+  // 传说/史诗/神话概率减半
+  const highTierMultiplier = 0.5;
+
+  const baseChances: Record<string, Record<string, number>> = {
+    normal: {
+      common: 0.04,      // 4%
+      advanced: 0.03,    // 3%
+      fine: 0.02,        // 2%
+      legendary: 0.007 * highTierMultiplier,  // 0.35%
+      epic: 0.004 * highTierMultiplier,      // 0.2%
+      mythic: 0.002 * highTierMultiplier,    // 0.1%
+    },
+    elite: {
+      common: 0,
+      advanced: 0,
+      fine: 0.30,        // 30%
+      legendary: 0.20 * highTierMultiplier,  // 10%
+      epic: 0.15 * highTierMultiplier,      // 7.5%
+      mythic: 0.08 * highTierMultiplier,    // 4%
+    },
+    boss: {
+      common: 0,
+      advanced: 0,
+      fine: 0,
+      legendary: 0.40 * highTierMultiplier,  // 20%
+      epic: 0.30 * highTierMultiplier,      // 15%
+      mythic: 0.15 * highTierMultiplier,    // 7.5%
+    },
+  };
+
+  return baseChances[enemyType][rarity] || 0;
 }

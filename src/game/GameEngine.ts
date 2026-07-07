@@ -44,7 +44,7 @@ import {
   getNextId,
 } from './utils';
 import { ENEMY_CONFIGS, NORMAL_ENEMY_TYPES, ELITE_ENEMY_TYPES, BOSS_ENEMY_TYPES } from './data/enemies';
-import { WEAPONS, ARMORS, ITEMS, SKILLS, INITIAL_EQUIPMENT, createEquipment, getQualitySetGroups, getItemDef, SLOT_LABELS, RARITY_LABELS } from './data/equipment';
+import { WEAPONS, ARMORS, ITEMS, SKILLS, INITIAL_EQUIPMENT, createEquipment, getQualitySetGroups, getItemDef, SLOT_LABELS, RARITY_LABELS, getRarityDropChance, getRarityDropWeights } from './data/equipment';
 import { getGemDef, MAX_GEM_SOCKETS, getSocketSuccessRate, isFailResetToZero, randomGemId } from './data/gems';
 import {
   ENHANCE_ITEMS,
@@ -831,10 +831,17 @@ expToNextLevel: Math.floor(10 + Math.pow(bs.level, 1.7) * 4 + bs.level * 4),
 
     const config = ENEMY_CONFIGS[type];
     
-    const healthMultiplier = 1 + (wave - 1) * 0.10 + Math.pow(1.009, wave - 1) * 0.4;
+    // 平衡调整：提高怪物血量成长以应对数值膨胀
+    const healthMultiplier = 1 + (wave - 1) * 0.12 + Math.pow(1.010, wave - 1) * 0.4;
     const damageMultiplier = 1 + (wave - 1) * 0.05 + Math.pow(1.006, wave - 1) * 0.25;
     const speedMultiplier = 1 + Math.min(0.35, (wave - 1) * 0.0035);
     const expMultiplier = 1 + (wave - 1) * 0.07 + Math.pow(1.008, wave - 1) * 0.35;
+
+    // Boss额外血量倍率（平衡调整：应对装备强化宝石附魔导致的数值膨胀）
+    // 动态倍率：随波次增长，前期新手友好，后期有挑战
+    const bossHpMultiplier = config.type === 'boss'
+      ? Math.min(45, 1 + Math.sqrt(wave) * 9 + wave * 0.3)
+      : 1;
 
     enemy.id = getNextId();
     enemy.type = config.type;
@@ -847,7 +854,7 @@ expToNextLevel: Math.floor(10 + Math.pow(bs.level, 1.7) * 4 + bs.level * 4),
       enemy.width = config.width;
       enemy.height = config.height;
     }
-    enemy.maxHealth = Math.floor(config.baseHealth * healthMultiplier);
+    enemy.maxHealth = Math.floor(config.baseHealth * healthMultiplier * bossHpMultiplier);
     enemy.health = enemy.maxHealth;
     // 怪物速度：普通怪+100%，精英/BOSS+200%
     const speedBonus = config.type === 'normal' ? 2.0 : 3.2;
@@ -882,8 +889,9 @@ expToNextLevel: Math.floor(10 + Math.pow(bs.level, 1.7) * 4 + bs.level * 4),
     enemy.pierceCount = config.basePierceCount;
     enemy.lifestealPercent = config.baseLifestealPercent;
     enemy.range = config.baseRange;
-    // 平衡调整：提升防御成长速度（0.15→0.20/波）
-    enemy.defense = Math.min(60, config.baseDefense + (wave - 1) * 0.20);
+    // 平衡调整：提升防御成长速度（0.20→0.25/波），上限提高至75%，应对数值膨胀
+    const defCap = config.type === 'boss' ? 75 : 70;
+    enemy.defense = Math.min(defCap, config.baseDefense + (wave - 1) * 0.25);
     enemy.burnChance = config.baseBurnChance;
     enemy.poisonChance = config.basePoisonChance;
     enemy.freezeChance = config.baseFreezeChance;
@@ -3456,26 +3464,36 @@ expToNextLevel: Math.floor(10 + Math.pow(bs.level, 1.7) * 4 + bs.level * 4),
     const expBonus = (this.player as any).expBonus || 0;
     const finalAmount = Math.floor(amount * (1 + expBonus));
     this.player.exp += finalAmount;
-    while (this.player.exp >= this.player.expToNextLevel) {
+    
+    while (this.player.exp >= this.player.expToNextLevel && this.player.level < 300) {
       this.player.exp -= this.player.expToNextLevel;
       this.player.level++;
       const lvl = this.player.level;
-      this.player.expToNextLevel = Math.floor(10 + Math.pow(lvl, 1.7) * 4 + lvl * 4);
+      this.player.expToNextLevel = this.calculateExpToNextLevel(lvl);
       this.player.skillPoints++;
       this.calculatePlayerStats();
       this.player.health = this.player.maxHealth;
       this.checkAchievements();
 
-      // 取消升级后选择属性的功能
-      // if (this.talents.length < 14) {
-      //   this.rollTalentChoices();
-      //   this.gameState.isPaused = true;
-      // }
-
       if (this.onPlayerChange) {
         this.onPlayerChange(this.player);
       }
     }
+    
+    if (this.player.level >= 300) {
+      this.player.exp = 0;
+      this.player.expToNextLevel = 0;
+    }
+  }
+
+  private calculateExpToNextLevel(level: number): number {
+    if (level >= 300) return 0;
+    
+    const baseExp = 100;
+    const levelPower = Math.pow(level, 2.1) * 3;
+    const levelLinear = level * 20;
+    
+    return Math.floor(baseExp + levelPower + levelLinear);
   }
 
   private addToInventory(itemId: string): void {
@@ -3644,19 +3662,19 @@ expToNextLevel: Math.floor(10 + Math.pow(bs.level, 1.7) * 4 + bs.level * 4),
       sold: false,
     });
 
-    const rarities: ('common' | 'advanced' | 'fine' | 'legendary')[] = ['common', 'advanced', 'fine', 'legendary'];
-    const rarityWeights = [50, 30, 15, 5];
+    const { rarities, weights } = getRarityDropWeights(this.player.level);
     const slots: ('weapon' | 'armor' | 'pants' | 'shoulder' | 'belt' | 'shoes' | 'earring' | 'ring' | 'necklace')[] = 
       ['weapon', 'armor', 'pants', 'shoulder', 'belt', 'shoes', 'earring', 'ring', 'necklace'];
 
     for (let i = 0; i < 3; i++) {
       const slot = slots[Math.floor(Math.random() * slots.length)];
       
-      let rarity: 'common' | 'advanced' | 'fine' | 'legendary' = 'common';
+      let rarity: EquipRarity = 'common';
       const roll = Math.random() * 100;
       let cumulative = 0;
+      const totalWeight = weights.reduce((sum, w) => sum + w, 0);
       for (let j = 0; j < rarities.length; j++) {
-        cumulative += rarityWeights[j];
+        cumulative += (weights[j] / totalWeight) * 100;
         if (roll < cumulative) {
           rarity = rarities[j];
           break;
@@ -4362,31 +4380,21 @@ expToNextLevel: Math.floor(10 + Math.pow(bs.level, 1.7) * 4 + bs.level * 4),
     const dropX = enemy.x + enemy.width / 2;
     const dropY = enemy.y + enemy.height / 2;
 
-    // 掉率表：每个品质独立判定
-    const dropTables: Record<EnemyType, Partial<Record<EquipRarity, number>>> = {
-      // 小怪：【普通】2%、【高级】1.5%、【精致】1%、【传说】0.7%、【史诗】0.5%、【神话】0.3%
-      normal: { common: 0.02, advanced: 0.015, fine: 0.01, legendary: 0.007, epic: 0.005, mythic: 0.003 },
-      // 精英怪：只爆【传说】20%、【史诗】15%、【神话】10%
-      elite: { legendary: 0.20, epic: 0.15, mythic: 0.10 },
-      // BOSS：只爆【史诗】40%、【神话】20%，等级高人物两档
-      boss: { epic: 0.40, mythic: 0.20 },
-    };
-
-    const table = dropTables[enemy.type];
+    const playerLevel = this.player.level;
+    const enemyType = enemy.type as 'normal' | 'elite' | 'boss';
     const dropLevel = enemy.type === 'boss' ? this.getBossDropLevel() : this.getDropLevel();
+
     let offsetIdx = 0;
     for (const rarityStr of ['common', 'advanced', 'fine', 'legendary', 'epic', 'mythic'] as EquipRarity[]) {
-      const chance = table[rarityStr];
-      if (!chance) continue;
+      const chance = getRarityDropChance(playerLevel, rarityStr, enemyType);
+      if (!chance || chance <= 0) continue;
       if (Math.random() < chance) {
         const slot = slots[randomInt(0, slots.length - 1)];
         const equip = createEquipment(slot, rarityStr, dropLevel);
         this.droppedEquipmentMap.set(equip.id, equip);
-        // 多件装备错开掉落位置
         const ox = dropX + (offsetIdx % 3 - 1) * 18;
         const oy = dropY + Math.floor(offsetIdx / 3) * 14;
         this.dropPool.acquire('equipment', ox, oy, 0, undefined, equip.id);
-        // 高品质装备气泡提示（精致及以上）
         if (this.onRareDrop && (rarityStr === 'fine' || rarityStr === 'legendary' || rarityStr === 'epic' || rarityStr === 'mythic')) {
           const slotLabel = SLOT_LABELS[slot] || slot;
           const rarityName = RARITY_LABELS[rarityStr] || rarityStr;
@@ -5214,10 +5222,10 @@ expToNextLevel: Math.floor(10 + Math.pow(bs.level, 1.7) * 4 + bs.level * 4),
   }
 
   levelUpBy(amount: number): void {
-    const target = this.player.level + amount;
+    const target = Math.min(this.player.level + amount, 300);
     while (this.player.level < target) {
       this.player.level++;
-      this.player.expToNextLevel = Math.floor(10 + Math.pow(this.player.level, 1.7) * 4 + this.player.level * 4);
+      this.player.expToNextLevel = this.calculateExpToNextLevel(this.player.level);
     }
     this.player.exp = 0;
     this.calculatePlayerStats();
@@ -5281,7 +5289,7 @@ expToNextLevel: Math.floor(10 + Math.pow(bs.level, 1.7) * 4 + bs.level * 4),
       if (saveData.player) {
         this.player.level = saveData.player.level || 1;
         this.player.exp = saveData.player.exp || 0;
-        this.player.expToNextLevel = saveData.player.expToNextLevel || Math.floor(10 + Math.pow(1, 1.7) * 4 + 1 * 4);
+        this.player.expToNextLevel = saveData.player.expToNextLevel || this.calculateExpToNextLevel(this.player.level);
         this.player.gold = saveData.player.gold || 0;
         this.player.score = saveData.player.score || 0;
         this.player.skillPoints = saveData.player.skillPoints || 0;
@@ -5358,8 +5366,8 @@ expToNextLevel: Math.floor(10 + Math.pow(bs.level, 1.7) * 4 + bs.level * 4),
   setBaseStats(stats: Partial<{ attack: number; attackSpeed: number; manualAttackSpeed: number; maxHealth: number; range: number; level: number }>): void {
     this.debugConfig.baseStats = { ...this.debugConfig.baseStats, ...stats };
     if (stats.level !== undefined) {
-      this.player.level = stats.level;
-      this.player.expToNextLevel = Math.floor(10 + Math.pow(stats.level, 1.7) * 4 + stats.level * 4);
+      this.player.level = Math.min(stats.level, 300);
+      this.player.expToNextLevel = this.calculateExpToNextLevel(this.player.level);
     }
     if (stats.maxHealth !== undefined) {
       this.player.health = stats.maxHealth;
@@ -5406,7 +5414,7 @@ expToNextLevel: Math.floor(10 + Math.pow(bs.level, 1.7) * 4 + bs.level * 4),
     }
     // 同步等级对应的经验上限
     if (stats.level !== undefined) {
-      p.expToNextLevel = Math.floor(10 + Math.pow(stats.level, 1.7) * 4 + stats.level * 4);
+      p.expToNextLevel = this.calculateExpToNextLevel(Math.min(stats.level, 300));
     }
     // 同步生命上限
     if (stats.maxHealth !== undefined && p.health > stats.maxHealth) {

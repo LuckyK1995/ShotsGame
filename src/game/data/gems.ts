@@ -1,5 +1,5 @@
 // 宝石系统：5种类型 × 2种品质（普通/高级）
-// 普通 = 1点属性，高级 = 2点属性
+// 普通 = 1点属性，高级 = 1点属性（平衡调整：原高级2点，削弱为1点以应对数值膨胀）
 // 每件装备最多镶嵌15颗宝石
 
 import type { ItemRarity } from '../types/game';
@@ -55,7 +55,7 @@ export const GEMS: Record<string, GemDef> = (() => {
   for (const t of types) {
     for (const r of rarities) {
       const info = GEM_TYPE_INFO[t];
-      const value = r === 'common' ? 1 : 2;
+      const value = 1; // 平衡调整：普通和高级宝石统一为1点属性（原高级为2点）
       const rarityLabel = GEM_RARITY_LABELS[r];
       const id = `gem_${t}_${r}`;
       out[id] = {
