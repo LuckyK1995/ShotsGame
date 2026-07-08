@@ -238,3 +238,21 @@ export function HomeDefenseIcon({ size, color, active }: IconProps) {
     </SvgWrap>
   );
 }
+
+// 趣味答题 - 问号/试卷
+export function QuizIcon({ size, color, active }: IconProps) {
+  return (
+    <SvgWrap size={size} color={color} active={active}>
+      {/* 试卷 */}
+      <rect x="5" y="5" width="14" height="15" rx="1" />
+      <path d="M5 9 L19 9" />
+      <path d="M7 13 L17 13" />
+      <path d="M7 16 L15 16" />
+      <path d="M7 19 L13 19" />
+      {/* 问号 */}
+      <path d="M15 7 L15 12" />
+      <path d="M13 10.5 C13 10 13.5 9.5 15 9.5 C16.5 9.5 17 10 17 10.5" />
+      <circle cx="15" cy="13" r="0.8" fill={color} stroke="none" />
+    </SvgWrap>
+  );
+}

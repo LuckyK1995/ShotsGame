@@ -50,6 +50,7 @@ interface GameStore {
   addRareDropNotification: (info: { id: number; rarity: string; name: string; icon: string; kind: 'equipment' | 'item' }) => void;
   removeRareDropNotification: (id: number) => void;
   setMails: (mails: Mail[]) => void;
+  addGold: (amount: number) => void;
 }
 
 export const useGameStore = create<GameStore>((set) => ({
@@ -99,4 +100,7 @@ export const useGameStore = create<GameStore>((set) => ({
     rareDropNotifications: state.rareDropNotifications.filter(n => n.id !== id),
   })),
   setMails: (mails) => set({ mails }),
+  addGold: (amount) => set((state) => ({
+    player: state.player ? { ...state.player, gold: (state.player.gold || 0) + amount } : state.player,
+  })),
 }));

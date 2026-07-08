@@ -1,8 +1,9 @@
 import { useState } from 'react';
 import {
   StageIcon, WorldBossIcon, PurgatoryIcon, DailyIcon,
-  MaterialIcon, MirrorIcon, GuardIcon, HomeDefenseIcon,
+  MaterialIcon, MirrorIcon, GuardIcon, HomeDefenseIcon, QuizIcon,
 } from './ButtonIcons';
+import { QuizModal } from './QuizModal';
 import {
   neonCyan, neonPurple, neonPink, neonYellow,
   neonGreen, neonBlue, neonOrange, neonRed
@@ -29,12 +30,13 @@ const MODES: ModeButton[] = [
   { id: 'material', label: '材料副本', desc: '收集稀有材料', icon: MaterialIcon, color: neonPurple, unlocked: true },
   { id: 'mirror', label: '镜像挑战', desc: '挑战自我镜像', icon: MirrorIcon, color: neonBlue, unlocked: true },
   { id: 'guard', label: '守卫战', desc: '坚守阵地', icon: GuardIcon, color: neonCyan, unlocked: true },
-  { id: 'homedefense', label: '家园守卫', desc: '守护最后家园', icon: HomeDefenseIcon, color: neonGreen, unlocked: true },
+  { id: 'quiz', label: '趣味答题', desc: '答题赢金币奖励', icon: QuizIcon, color: neonPink, unlocked: true },
 ];
 
 export function MainMenu({ onEnterStage }: MainMenuProps) {
   const [toast, setToast] = useState<string | null>(null);
   const [hoverId, setHoverId] = useState<string | null>(null);
+  const [quizModalOpen, setQuizModalOpen] = useState(false);
 
   const neonText: React.CSSProperties = {
     fontFamily: '"Rajdhani", "Orbitron", "Courier New", monospace',
@@ -44,7 +46,11 @@ export function MainMenu({ onEnterStage }: MainMenuProps) {
 
   const handleModeClick = (mode: ModeButton) => {
     if (mode.unlocked) {
-      onEnterStage(mode.id);
+      if (mode.id === 'quiz') {
+        setQuizModalOpen(true);
+      } else {
+        onEnterStage(mode.id);
+      }
     } else {
       setToast(`【${mode.label}】即将开放，敬请期待`);
       setTimeout(() => setToast(null), 1800);
@@ -52,12 +58,13 @@ export function MainMenu({ onEnterStage }: MainMenuProps) {
   };
 
   return (
-    <div
-      className="absolute inset-0 z-50 overflow-hidden"
-      style={{
-        background: 'linear-gradient(180deg, #0A0814 0%, #13102A 40%, #1A0E2E 70%, #0D0B1A 100%)',
-      }}
-    >
+    <>
+      <div
+        className="absolute inset-0 z-50 overflow-hidden"
+        style={{
+          background: 'linear-gradient(180deg, #0A0814 0%, #13102A 40%, #1A0E2E 70%, #0D0B1A 100%)',
+        }}
+      >
       {/* 背景星空 */}
       <div className="absolute inset-0 pointer-events-none" style={{ opacity: 0.7 }}>
         {Array.from({ length: 40 }).map((_, i) => {
@@ -278,7 +285,10 @@ export function MainMenu({ onEnterStage }: MainMenuProps) {
       )}
 
       {/* 闪烁动画样式：keyframes 已提取至 index.css */}
-    </div>
+      </div>
+
+      <QuizModal isOpen={quizModalOpen} onClose={() => setQuizModalOpen(false)} />
+    </>
   );
 }
 
