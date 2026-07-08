@@ -302,3 +302,47 @@ export const PixelHomeIcon = () => (
     <rect x="2" y="19.5" width="18" height="1.2" fill="#00FF9D" stroke="#006B40" strokeWidth="0.2" />
   </svg>
 );
+
+export const PixelCheckInIcon = () => (
+  <svg width="22" height="22" viewBox="0 0 22 22" fill="none" xmlns="http://www.w3.org/2000/svg">
+    {/* 日历主体 */}
+    <rect x="2" y="4" width="18" height="16" rx="1.5" fill="#B026FF" stroke="#5A0E80" strokeWidth="0.5" />
+    {/* 日历顶部横条 */}
+    <rect x="2" y="4" width="18" height="5" rx="1.5" fill="#FF0080" stroke="#8B0050" strokeWidth="0.3" />
+    {/* 挂钩 */}
+    <rect x="6" y="2" width="2" height="4" rx="0.5" fill="#FFE600" stroke="#B8860B" strokeWidth="0.2" />
+    <rect x="14" y="2" width="2" height="4" rx="0.5" fill="#FFE600" stroke="#B8860B" strokeWidth="0.2" />
+    {/* 日期格子 */}
+    <rect x="4" y="11" width="3" height="2.5" rx="0.3" fill="#00F5D4" opacity="0.7" />
+    <rect x="9.5" y="11" width="3" height="2.5" rx="0.3" fill="#00F5D4" opacity="0.7" />
+    <rect x="15" y="11" width="3" height="2.5" rx="0.3" fill="#FFE600" opacity="0.7" />
+    <rect x="4" y="15.5" width="3" height="2.5" rx="0.3" fill="#00F5D4" opacity="0.5" />
+    <rect x="9.5" y="15.5" width="3" height="2.5" rx="0.3" fill="#00F5D4" opacity="0.5" />
+    <rect x="15" y="15.5" width="3" height="2.5" rx="0.3" fill="#00F5D4" opacity="0.5" />
+    {/* 勾选标记 */}
+    <path d="M5 12.5 L6 14 L8 11" stroke="#00FF9D" strokeWidth="1" strokeLinecap="round" fill="none" />
+  </svg>
+);
+
+export const PixelOnlineIcon = () => (
+  <svg width="22" height="22" viewBox="0 0 22 22" fill="none" xmlns="http://www.w3.org/2000/svg">
+    {/* 时钟外圈 */}
+    <circle cx="11" cy="11" r="9" fill="#B026FF" stroke="#5A0E80" strokeWidth="0.5" />
+    <circle cx="11" cy="11" r="7.5" fill="#1A1535" stroke="#FF0080" strokeWidth="0.3" />
+    {/* 时针 */}
+    <line x1="11" y1="11" x2="11" y2="5.5" stroke="#00F5D4" strokeWidth="1.2" strokeLinecap="round" />
+    {/* 分针 */}
+    <line x1="11" y1="11" x2="15.5" y2="9" stroke="#FFE600" strokeWidth="0.8" strokeLinecap="round" />
+    {/* 中心点 */}
+    <circle cx="11" cy="11" r="1" fill="#FF0080" />
+    {/* 刻度 */}
+    <line x1="11" y1="3.5" x2="11" y2="4.5" stroke="#00F5D4" strokeWidth="0.5" />
+    <line x1="11" y1="17.5" x2="11" y2="18.5" stroke="#00F5D4" strokeWidth="0.5" />
+    <line x1="3.5" y1="11" x2="4.5" y2="11" stroke="#00F5D4" strokeWidth="0.5" />
+    <line x1="17.5" y1="11" x2="18.5" y2="11" stroke="#00F5D4" strokeWidth="0.5" />
+    {/* 礼物标记 */}
+    <rect x="15" y="1" width="5" height="5" rx="1" fill="#FFE600" stroke="#B8860B" strokeWidth="0.3" />
+    <line x1="17.5" y1="1" x2="17.5" y2="6" stroke="#FF0080" strokeWidth="0.5" />
+    <path d="M16 1 Q16 0 17 0.5 Q18 0 18 1" fill="#FF0080" />
+  </svg>
+);

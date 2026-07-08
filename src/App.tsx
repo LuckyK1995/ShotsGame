@@ -19,10 +19,13 @@ import { MailPanel } from './components/MailPanel';
 import { RestartConfirmModal } from './components/RestartConfirmModal';
 import { MainMenu } from './components/MainMenu';
 import { CharacterPanel } from './components/CharacterPanel';
+import { CheckInPanel } from './components/CheckInPanel';
+import { OnlineRewardPanel } from './components/OnlineRewardPanel';
 import {
   PixelButton,
   PixelCharIcon, PixelSkillIcon, PixelAchieveIcon, PixelSocialIcon,
   PixelMailIcon, PixelBagIcon, PixelRestartIcon, PixelHomeIcon,
+  PixelCheckInIcon, PixelOnlineIcon,
 } from './components/PixelButton';
 
 // 设计基准宽度（用于决定整体容器的最大宽度）
@@ -69,6 +72,8 @@ function App() {
   const [bagTab, setBagTab] = useState<BagTab>('equipment');
   const [restartConfirm, setRestartConfirm] = useState(false);
   const [socialToast, setSocialToast] = useState(false);
+  const [checkInOpen, setCheckInOpen] = useState(false);
+  const [onlineRewardOpen, setOnlineRewardOpen] = useState(false);
 
   // 背包页签：仅保留 装备/物品/调试（模块级常量，避免每次 render 重建）
   // engineRef 稳定引用（避免每次 render 创建新对象导致子组件 memo 失效）
@@ -125,9 +130,11 @@ function App() {
     { id: 'social', label: '社交', iconElement: <PixelSocialIcon />, action: handleSocial },
     { id: 'mail', label: '邮件', iconElement: <PixelMailIcon />, action: () => togglePanel('mail') },
     { id: 'bag', label: '背包', iconElement: <PixelBagIcon />, action: () => togglePanel('bag') },
+    { id: 'checkin', label: '签到', iconElement: <PixelCheckInIcon />, action: () => setCheckInOpen(true) },
+    { id: 'online', label: '在线', iconElement: <PixelOnlineIcon />, action: () => setOnlineRewardOpen(true) },
     { id: 'restart', label: '重开', iconElement: <PixelRestartIcon />, action: () => setRestartConfirm(true) },
     { id: 'home', label: '主界面', iconElement: <PixelHomeIcon />, action: handleBackToMenu },
-  ], [togglePanel, handleSocial, handleBackToMenu]);
+  ], [togglePanel, handleSocial, handleBackToMenu, setCheckInOpen, setOnlineRewardOpen]);
 
   return (
     <div
@@ -164,6 +171,8 @@ function App() {
             }}
           />
           {showEquipStats && <EquipmentStatsModal onClose={() => setShowEquipStats(false)} />}
+          <CheckInPanel engineRef={engineRef} isOpen={checkInOpen} onClose={() => setCheckInOpen(false)} />
+          <OnlineRewardPanel engineRef={engineRef} isOpen={onlineRewardOpen} onClose={() => setOnlineRewardOpen(false)} />
         </div>
 
         {/* 底部控制区：固定 190px = 110 功能区 + 50 按钮区 + 30 占位框 */}

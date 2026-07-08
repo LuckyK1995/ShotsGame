@@ -254,6 +254,14 @@ export class GameEngine {
   private eliteBossSpawnedThisWave: boolean = false;
   private highestWave: number = 0;
 
+  // 7日签到数据
+  private checkInDays: number[] = [];   // 本周已签到的天数（0-6）
+  private checkInWeekKey: string = '';   // 当前周的标识（用于判断是否需要重置）
+  // 在线奖励数据
+  private onlineMinutes: number = 0;     // 本周期累计在线分钟数
+  private onlineRewardClaimed: number = 0; // 已领取次数（0-4）
+  private onlineTimer: number = 0;       // 分钟计时器
+
   debugConfig: {
     baseStats: { attack: number; attackSpeed: number; manualAttackSpeed: number; maxHealth: number; range: number; level: number };
     powerWeights: { attack: number; attackSpeed: number; maxHealth: number; critRate: number; critDamage: number; physicalPenetration: number; lifestealPercent: number; range: number; defense: number; burnChance: number; poisonChance: number; freezeChance: number; lightningChance: number };
@@ -2044,6 +2052,7 @@ expToNextLevel: Math.floor(10 + Math.pow(bs.level, 1.7) * 4 + bs.level * 4),
     this.updateDrone(dt);
     this.updateClones(dt);
     this.updateHomeTowers(dt);
+    this.updateOnlineTime(dt);
 
     // 更新剩余怪物数
     this.gameState.waveEnemiesRemaining = this.getWaveRemainingCount();
@@ -5847,6 +5856,144 @@ expToNextLevel: Math.floor(10 + Math.pow(bs.level, 1.7) * 4 + bs.level * 4),
     this.learnSkillsByFilter(id => id.startsWith('clone_'));
   }
 
+  // ==================== 7日签到系统 ====================
+
+  // 获取当前周的key（格式：年-周数）
+  private getWeekKey(): string {
+    const now = new Date();
+    const startOfYear = new Date(now.getFullYear(), 0, 1);
+    const weekNum = Math.ceil(((now.getTime() - startOfYear.getTime()) / 86400000 + startOfYear.getDay() + 1) / 7);
+    return `${now.getFullYear()}-${weekNum}`;
+  }
+
+  // 获取今天是本周第几天（0=周一，6=周日）
+  private getTodayDayIndex(): number {
+    const day = new Date().getDay();
+    return day === 0 ? 6 : day - 1; // 转为周一=0，周日=6
+  }
+
+  // 检查并重置过期的签到数据
+  private refreshCheckInWeek(): void {
+    const currentWeek = this.getWeekKey();
+    if (this.checkInWeekKey !== currentWeek) {
+      this.checkInWeekKey = currentWeek;
+      this.checkInDays = [];
+    }
+  }
+
+  // 执行签到
+  checkIn(): { success: boolean; day: number; rewards: { itemId: string; count: number; gold: number } } {
+    this.refreshCheckInWeek();
+    const today = this.getTodayDayIndex();
+    if (this.checkInDays.includes(today)) {
+      return { success: false, day: today, rewards: { itemId: '', count: 0, gold: 0 } };
+    }
+    this.checkInDays.push(today);
+    const rewards = this.getCheckInRewards(today);
+    // 发放奖励
+    if (rewards.itemId) {
+      for (let i = 0; i < rewards.count; i++) {
+        this.addToInventory(rewards.itemId);
+      }
+    }
+    if (rewards.gold > 0) {
+      this.addGold(rewards.gold);
+    }
+    this.saveGame();
+    return { success: true, day: today, rewards };
+  }
+
+  // 获取签到状态
+  getCheckInStatus(): { days: number[]; todayChecked: boolean; weekKey: string } {
+    this.refreshCheckInWeek();
+    const today = this.getTodayDayIndex();
+    return {
+      days: [...this.checkInDays],
+      todayChecked: this.checkInDays.includes(today),
+      weekKey: this.checkInWeekKey,
+    };
+  }
+
+  // 每日签到奖励配置
+  private getCheckInRewards(day: number): { itemId: string; count: number; gold: number } {
+    const rewardTable = [
+      { itemId: 'health_potion', count: 5, gold: 200 },       // 第1天
+      { itemId: 'attack_boost', count: 3, gold: 300 },        // 第2天
+      { itemId: 'speed_boost', count: 3, gold: 300 },         // 第3天
+      { itemId: 'bomb', count: 3, gold: 500 },                // 第4天
+      { itemId: 'health_potion_advanced', count: 5, gold: 500 }, // 第5天
+      { itemId: 'freeze_bomb', count: 2, gold: 800 },         // 第6天
+      { itemId: 'health_potion_legendary', count: 3, gold: 1500 }, // 第7天（大奖）
+    ];
+    return rewardTable[day] || rewardTable[0];
+  }
+
+  // ==================== 在线奖励系统 ====================
+
+  // 每帧更新在线时间
+  private updateOnlineTime(dt: number): void {
+    if (!this.gameState.isRunning || this.gameState.isPaused) return;
+    if (this.onlineRewardClaimed >= 4) return;
+
+    this.onlineTimer += dt;
+    if (this.onlineTimer >= 60000) { // 每60秒
+      this.onlineTimer -= 60000;
+      this.onlineMinutes++;
+      // 每30分钟可领取一次
+      if (this.onlineMinutes >= (this.onlineRewardClaimed + 1) * 30) {
+        // 标记可领取（UI轮询获取状态）
+      }
+    }
+  }
+
+  // 领取在线奖励
+  claimOnlineReward(): { success: boolean; tier: number; rewards: { itemId: string; count: number; gold: number } } {
+    const nextTier = this.onlineRewardClaimed + 1;
+    if (nextTier > 4) {
+      return { success: false, tier: 0, rewards: { itemId: '', count: 0, gold: 0 } };
+    }
+    const requiredMinutes = nextTier * 30;
+    if (this.onlineMinutes < requiredMinutes) {
+      return { success: false, tier: 0, rewards: { itemId: '', count: 0, gold: 0 } };
+    }
+    this.onlineRewardClaimed = nextTier;
+    const rewards = this.getOnlineReward(nextTier);
+    if (rewards.itemId) {
+      for (let i = 0; i < rewards.count; i++) {
+        this.addToInventory(rewards.itemId);
+      }
+    }
+    if (rewards.gold > 0) {
+      this.addGold(rewards.gold);
+    }
+    this.saveGame();
+    return { success: true, tier: nextTier, rewards };
+  }
+
+  // 获取在线奖励状态
+  getOnlineRewardStatus(): { minutes: number; claimed: number; canClaim: boolean; nextClaimMinutes: number } {
+    const nextTier = this.onlineRewardClaimed + 1;
+    const nextClaimMinutes = nextTier <= 4 ? nextTier * 30 : 0;
+    const canClaim = nextTier <= 4 && this.onlineMinutes >= nextClaimMinutes;
+    return {
+      minutes: this.onlineMinutes,
+      claimed: this.onlineRewardClaimed,
+      canClaim,
+      nextClaimMinutes,
+    };
+  }
+
+  // 在线奖励配置
+  private getOnlineReward(tier: number): { itemId: string; count: number; gold: number } {
+    const rewardTable = [
+      { itemId: 'health_potion', count: 5, gold: 300 },         // 第1次（30分钟）
+      { itemId: 'attack_boost', count: 3, gold: 500 },          // 第2次（60分钟）
+      { itemId: 'bomb', count: 3, gold: 800 },                  // 第3次（90分钟）
+      { itemId: 'health_potion_fine', count: 5, gold: 1500 },   // 第4次（120分钟）
+    ];
+    return rewardTable[tier - 1] || rewardTable[0];
+  }
+
   levelUpTo100(): void {
     this.levelUpBy(100);
   }
@@ -5902,6 +6049,12 @@ expToNextLevel: Math.floor(10 + Math.pow(bs.level, 1.7) * 4 + bs.level * 4),
       achievements: this.achievements,
       mails: this.mails,
       savedAt: Date.now(),
+      // 7日签到数据
+      checkInDays: this.checkInDays,
+      checkInWeekKey: this.checkInWeekKey,
+      // 在线奖励数据
+      onlineMinutes: this.onlineMinutes,
+      onlineRewardClaimed: this.onlineRewardClaimed,
     };
     try {
       localStorage.setItem('shotsGameSave', JSON.stringify(saveData));
@@ -5981,6 +6134,20 @@ expToNextLevel: Math.floor(10 + Math.pow(bs.level, 1.7) * 4 + bs.level * 4),
       }
       if (saveData.mails) {
         this.mails = saveData.mails;
+      }
+      // 7日签到数据
+      if (saveData.checkInDays) {
+        this.checkInDays = saveData.checkInDays;
+      }
+      if (saveData.checkInWeekKey) {
+        this.checkInWeekKey = saveData.checkInWeekKey;
+      }
+      // 在线奖励数据
+      if (saveData.onlineMinutes !== undefined) {
+        this.onlineMinutes = saveData.onlineMinutes;
+      }
+      if (saveData.onlineRewardClaimed !== undefined) {
+        this.onlineRewardClaimed = saveData.onlineRewardClaimed;
       }
 
       this.calculatePlayerStats();
