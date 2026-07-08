@@ -2,15 +2,28 @@ import { useState } from 'react';
 import {
   StageIcon, WorldBossIcon, PurgatoryIcon, DailyIcon,
   MaterialIcon, MirrorIcon, GuardIcon, HomeDefenseIcon, QuizIcon,
+  CheckInIcon, OnlineRewardIcon,
 } from './ButtonIcons';
 import { QuizModal } from './QuizModal';
+import { CheckInPanel } from './CheckInPanel';
+import { OnlineRewardPanel } from './OnlineRewardPanel';
 import {
   neonCyan, neonPurple, neonPink, neonYellow,
   neonGreen, neonBlue, neonOrange, neonRed
 } from '../theme/colors';
 
+interface EngineRef {
+  current: {
+    checkIn?: () => any;
+    getCheckInStatus?: () => any;
+    claimOnlineReward?: () => any;
+    getOnlineRewardStatus?: () => any;
+  } | null;
+}
+
 interface MainMenuProps {
   onEnterStage: (mode: string) => void;
+  engineRef?: EngineRef;
 }
 
 interface ModeButton {
@@ -30,13 +43,15 @@ const MODES: ModeButton[] = [
   { id: 'material', label: '材料副本', desc: '收集稀有材料', icon: MaterialIcon, color: neonPurple, unlocked: true },
   { id: 'mirror', label: '镜像挑战', desc: '挑战自我镜像', icon: MirrorIcon, color: neonBlue, unlocked: true },
   { id: 'guard', label: '守卫战', desc: '坚守阵地', icon: GuardIcon, color: neonCyan, unlocked: true },
-  { id: 'quiz', label: '趣味答题', desc: '答题赢金币奖励', icon: QuizIcon, color: neonPink, unlocked: true },
+  { id: 'homedefense', label: '家园守卫', desc: '守护最后家园', icon: HomeDefenseIcon, color: neonGreen, unlocked: true },
 ];
 
-export function MainMenu({ onEnterStage }: MainMenuProps) {
+export function MainMenu({ onEnterStage, engineRef }: MainMenuProps) {
   const [toast, setToast] = useState<string | null>(null);
   const [hoverId, setHoverId] = useState<string | null>(null);
   const [quizModalOpen, setQuizModalOpen] = useState(false);
+  const [checkInOpen, setCheckInOpen] = useState(false);
+  const [onlineRewardOpen, setOnlineRewardOpen] = useState(false);
 
   const neonText: React.CSSProperties = {
     fontFamily: '"Rajdhani", "Orbitron", "Courier New", monospace',
@@ -46,11 +61,7 @@ export function MainMenu({ onEnterStage }: MainMenuProps) {
 
   const handleModeClick = (mode: ModeButton) => {
     if (mode.unlocked) {
-      if (mode.id === 'quiz') {
-        setQuizModalOpen(true);
-      } else {
-        onEnterStage(mode.id);
-      }
+      onEnterStage(mode.id);
     } else {
       setToast(`【${mode.label}】即将开放，敬请期待`);
       setTimeout(() => setToast(null), 1800);
@@ -167,6 +178,132 @@ export function MainMenu({ onEnterStage }: MainMenuProps) {
           }}
         >
           ── SHOTS GAME ──
+        </div>
+      </div>
+
+      {/* 右侧功能按钮 - 垂直排列，手指易触碰位置 */}
+      <div
+        className="absolute right-3 flex flex-col gap-5 z-20"
+        style={{ top: '12%' }}
+      >
+        {/* 连续签到 */}
+        <div className="flex flex-col items-center gap-1">
+          <button
+            onClick={() => setCheckInOpen(true)}
+            onMouseEnter={() => setHoverId('checkin')}
+            onMouseLeave={() => setHoverId(null)}
+            style={{
+              width: '44px',
+              height: '44px',
+              borderRadius: '50%',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              background: hoverId === 'checkin'
+                ? `linear-gradient(180deg, ${neonYellow}40, ${neonYellow}10)`
+                : 'rgba(19, 16, 37, 0.8)',
+              border: `1.5px solid ${hoverId === 'checkin' ? neonYellow : 'rgba(100, 80, 140, 0.4)'}`,
+              boxShadow: hoverId === 'checkin'
+                ? `0 0 12px ${neonYellow}60, inset 0 1px 0 rgba(255,255,255,0.1)`
+                : 'inset 0 1px 0 rgba(255,255,255,0.05)',
+              cursor: 'pointer',
+              transition: 'all 0.15s ease',
+            }}
+          >
+            <CheckInIcon size={24} color={neonYellow} active={hoverId === 'checkin'} />
+          </button>
+          <div
+            style={{
+              ...neonText,
+              fontSize: '7px',
+              color: neonYellow,
+              textAlign: 'center',
+              textShadow: `0 0 4px ${neonYellow}80`,
+              letterSpacing: '0.5px',
+            }}
+          >
+            连续签到
+          </div>
+        </div>
+
+        {/* 在线奖励 */}
+        <div className="flex flex-col items-center gap-1">
+          <button
+            onClick={() => setOnlineRewardOpen(true)}
+            onMouseEnter={() => setHoverId('online')}
+            onMouseLeave={() => setHoverId(null)}
+            style={{
+              width: '44px',
+              height: '44px',
+              borderRadius: '50%',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              background: hoverId === 'online'
+                ? `linear-gradient(180deg, ${neonCyan}40, ${neonCyan}10)`
+                : 'rgba(19, 16, 37, 0.8)',
+              border: `1.5px solid ${hoverId === 'online' ? neonCyan : 'rgba(100, 80, 140, 0.4)'}`,
+              boxShadow: hoverId === 'online'
+                ? `0 0 12px ${neonCyan}60, inset 0 1px 0 rgba(255,255,255,0.1)`
+                : 'inset 0 1px 0 rgba(255,255,255,0.05)',
+              cursor: 'pointer',
+              transition: 'all 0.15s ease',
+            }}
+          >
+            <OnlineRewardIcon size={24} color={neonCyan} active={hoverId === 'online'} />
+          </button>
+          <div
+            style={{
+              ...neonText,
+              fontSize: '7px',
+              color: neonCyan,
+              textAlign: 'center',
+              textShadow: `0 0 4px ${neonCyan}80`,
+              letterSpacing: '0.5px',
+            }}
+          >
+            在线奖励
+          </div>
+        </div>
+
+        {/* 趣味答题 */}
+        <div className="flex flex-col items-center gap-1">
+          <button
+            onClick={() => setQuizModalOpen(true)}
+            onMouseEnter={() => setHoverId('quiz')}
+            onMouseLeave={() => setHoverId(null)}
+            style={{
+              width: '44px',
+              height: '44px',
+              borderRadius: '50%',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              background: hoverId === 'quiz'
+                ? `linear-gradient(180deg, ${neonPink}40, ${neonPink}10)`
+                : 'rgba(19, 16, 37, 0.8)',
+              border: `1.5px solid ${hoverId === 'quiz' ? neonPink : 'rgba(100, 80, 140, 0.4)'}`,
+              boxShadow: hoverId === 'quiz'
+                ? `0 0 12px ${neonPink}60, inset 0 1px 0 rgba(255,255,255,0.1)`
+                : 'inset 0 1px 0 rgba(255,255,255,0.05)',
+              cursor: 'pointer',
+              transition: 'all 0.15s ease',
+            }}
+          >
+            <QuizIcon size={24} color={neonPink} active={hoverId === 'quiz'} />
+          </button>
+          <div
+            style={{
+              ...neonText,
+              fontSize: '7px',
+              color: neonPink,
+              textAlign: 'center',
+              textShadow: `0 0 4px ${neonPink}80`,
+              letterSpacing: '0.5px',
+            }}
+          >
+            趣味答题
+          </div>
         </div>
       </div>
 
@@ -288,6 +425,12 @@ export function MainMenu({ onEnterStage }: MainMenuProps) {
       </div>
 
       <QuizModal isOpen={quizModalOpen} onClose={() => setQuizModalOpen(false)} />
+      {engineRef && (
+        <>
+          <CheckInPanel engineRef={engineRef as any} isOpen={checkInOpen} onClose={() => setCheckInOpen(false)} />
+          <OnlineRewardPanel engineRef={engineRef as any} isOpen={onlineRewardOpen} onClose={() => setOnlineRewardOpen(false)} />
+        </>
+      )}
     </>
   );
 }

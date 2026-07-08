@@ -256,3 +256,45 @@ export function QuizIcon({ size, color, active }: IconProps) {
     </SvgWrap>
   );
 }
+
+// 连续签到 - 日历+勾选
+export function CheckInIcon({ size, color, active }: IconProps) {
+  return (
+    <SvgWrap size={size} color={color} active={active}>
+      {/* 日历外框 */}
+      <rect x="5" y="6" width="14" height="14" rx="1" />
+      {/* 日历顶部条 */}
+      <rect x="5" y="6" width="14" height="3" fill={color} opacity="0.3" />
+      {/* 挂耳 */}
+      <path d="M8 6 L8 4" strokeWidth="1.5" strokeLinecap="round" />
+      <path d="M16 6 L16 4" strokeWidth="1.5" strokeLinecap="round" />
+      {/* 日期格子 */}
+      <path d="M5 11 L19 11" />
+      <path d="M9 6 L9 20" />
+      <path d="M15 6 L15 20" />
+      {/* 勾选 */}
+      <path d="M10 14.5 L11.5 16 L15 12.5" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+    </SvgWrap>
+  );
+}
+
+// 在线奖励 - 时钟+礼物
+export function OnlineRewardIcon({ size, color, active }: IconProps) {
+  return (
+    <SvgWrap size={size} color={color} active={active}>
+      {/* 时钟外圆 */}
+      <circle cx="12" cy="12" r="8" />
+      <circle cx="12" cy="12" r="8" fill={color} opacity="0.15" />
+      {/* 时钟刻度 */}
+      <path d="M12 4.5 L12 6" strokeLinecap="round" />
+      <path d="M12 18 L12 19.5" strokeLinecap="round" />
+      <path d="M4.5 12 L6 12" strokeLinecap="round" />
+      <path d="M18 12 L19.5 12" strokeLinecap="round" />
+      {/* 时钟指针 */}
+      <path d="M12 12 L12 8" strokeWidth="1.6" strokeLinecap="round" />
+      <path d="M12 12 L15 12" strokeWidth="1.6" strokeLinecap="round" />
+      {/* 中心 */}
+      <circle cx="12" cy="12" r="1" fill={color} stroke="none" />
+    </SvgWrap>
+  );
+}
