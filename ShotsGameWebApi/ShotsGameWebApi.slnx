@@ -1,0 +1,4 @@
+<Solution>
+  <Project Path="ShotsGame.Core/ShotsGame.Core.csproj" />
+  <Project Path="ShotsGame.WebApi/ShotsGame.WebApi.csproj" />
+</Solution>

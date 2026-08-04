@@ -1,0 +1,691 @@
+# 横板射击小游戏项目说明
+
+## 项目定位
+
+这是一个基于 React、TypeScript、Vite 和 HTML5 Canvas 的 2D 横板射击放置游戏。玩家固定在画面左侧，通过自动射击、手动点击、主动技能、装备成长、技能树和道具消耗抵御从右侧刷新的怪物波次。
+
+当前实现已经超过原始模板 README 的范围，包含战斗、波次、装备、背包、商店、图鉴、成就、天气、天赋、调试和精灵帧动画系统。项目的游戏逻辑集中在 `src/game/GameEngine.ts`，React 组件主要负责 UI 展示和用户输入。
+
+## 技术栈
+
+| 技术 | 版本 | 用途 |
+| --- | --- | --- |
+| React | ^18.3.1 | 界面层与组件渲染 |
+| React DOM | ^18.3.1 | DOM 挂载 |
+| Zustand | ^5.0.3 | 全局状态同步 |
+| React Router DOM | ^7.3.0 | 路由依赖，当前项目未形成多页面路由 |
+| Lucide React | ^0.511.0 | 图标依赖 |
+| Tailwind CSS | ^3.4.17 | 样式工具 |
+| TypeScript | ~5.8.3 | 类型系统 |
+| Vite | ^6.3.5 | 开发与构建 |
+| canvas | ^3.2.3 | 本地生成精灵图脚本使用 |
+
+## 启动命令
+
+```bash
+npm install
+npm run dev
+npm run build
+npm run check
+npm run lint
+```
+
+`npm run dev` 启动开发服务器，`npm run build` 先执行 TypeScript 构建再执行 Vite 打包。当前构建产物输出到 `dist`。
+
+## 目录结构
+
+```text
+.
+├── public/assets                 静态游戏资源与 UI 图片
+│   ├── player_frames             主角帧序列资源
+│   ├── ui / ui2 / ui3 / ui_final 多版 UI 图片资源
+│   ├── background.png            背景图
+│   ├── monster_orc*.png          怪物贴图
+│   ├── monster_slime.png         史莱姆贴图
+│   └── player.png                旧版主角贴图
+├── src
+│   ├── App.tsx                   单页游戏布局
+│   ├── components                React UI 组件
+│   ├── game
+│   │   ├── GameEngine.ts         游戏主引擎
+│   │   ├── data                  敌人、装备、物品、技能数据
+│   │   ├── types                 游戏类型定义
+│   │   └── utils.ts              工具函数与对象池
+│   ├── store/gameStore.ts        Zustand 状态仓库
+│   ├── hooks/useTheme.ts         主题 hook
+│   └── lib/utils.ts              UI 工具函数
+├── generate_*.cjs                资源生成脚本
+├── game_balance_optimizer*.cjs   平衡性优化脚本
+├── package.json                  依赖与脚本
+└── vite.config.ts                Vite 配置
+```
+
+## 运行架构
+
+游戏分为三层：Canvas 战斗画面、React DOM 操作面板、Zustand 状态同步。Canvas 负责高频实体渲染和碰撞计算，React 只订阅引擎回调后的状态副本，避免每帧触发复杂 DOM 重渲染。
+
+`GameCanvas` 在挂载时创建 `GameEngine`，注册 `onStateChange`、`onPlayerChange`、`onInventoryChange`、`onSkillsChange` 等回调，并把引擎暴露给上层组件。底部面板通过 `engineRef.current` 调用穿戴装备、使用物品、购买商店道具、升级技能、调试接口等方法。
+
+## 页面布局
+
+`App.tsx` 使用固定设计宽度 `430px`，底部面板高度 `290px`。上半部分是游戏区域，下半部分是标签页操作区。
+
+| 区域/组件 | 职责 |
+| --- | --- |
+| GameCanvas | 创建 `GameEngine`，绑定 Canvas、点击、触摸和键盘事件，把引擎状态同步到 Zustand |
+| StatusBar | 展示波次、生命、经验、金币/分数，并提供商店入口 |
+| BossHealthBar | BOSS 或怪物沙袋出现时展示顶部血条 |
+| WaveNotice | 展示新波次、精英/BOSS提示 |
+| TabPanel | 底部标签容器，承载装备、物品、技能、图鉴、调试页 |
+| EquipmentPanel | 装备栏、仓库、穿戴、更换、分解、战力详情入口 |
+| InventoryPanel | 背包物品展示、使用、批量出售 |
+| SkillTree | 属性技能、特效技能、分身技能升级和重置 |
+| CodexPanel | 敌人、装备、物品发现与击杀/获取记录 |
+| DebugPanel | 沙袋、技能、等级、金币、战力参数等调试入口 |
+| ShopPanel | 波次间商店购买、刷新、补给 |
+| AchievementNotification | 成就解锁提示 |
+| GameOverModal | 死亡后的重开当前波次入口 |
+| EquipmentStatsModal | 装备属性与战力明细弹窗 |
+| EquipmentIcon | 装备图标、品质背景、套装特效渲染 |
+| EquipmentBar | 装备快捷展示组件 |
+| SkillBar | 普通技能栏组件 |
+| ActiveSkillBar | 主动技能栏组件 |
+| TalentSelection | 升级后天赋三选一界面 |
+| ContextMenu | 上下文菜单 |
+| OfflineRewardModal | 离线收益弹窗，当前未在 App 中挂载 |
+| Empty | 空状态组件 |
+
+## 状态管理
+
+`src/store/gameStore.ts` 使用 Zustand 保存引擎对 UI 暴露的状态。仓库只保存展示所需数据，不接管游戏主循环。
+
+| 状态字段 | 含义 |
+| --- | --- |
+| gameState | 波次、暂停、结束、BOSS 状态等全局战斗状态 |
+| player | 玩家属性、等级、经验、金币、分数和闪避状态 |
+| inventory | 背包物品堆叠 |
+| skills | 技能树当前等级与冷却 |
+| equipment | 已穿戴装备 |
+| equipmentStorage | 装备仓库 |
+| buffs | 玩家当前增益/减益 |
+| activeSkills | Q/E/R 主动技能 |
+| talentChoices | 升级时出现的三选一天赋 |
+| showTalentSelection | 天赋选择弹窗开关 |
+| weather | 当前天气类型、持续时间、强度、过渡时间 |
+| codexEntries | 图鉴条目 |
+| achievements | 成就进度 |
+| unlockedAchievement | 最近解锁的成就，用于通知展示 |
+
+## 类型定义
+
+| 类型 | 取值 |
+| --- | --- |
+| EnemyType | `normal`、`elite`、`boss` |
+| EquipSlot | `weapon`、`armor`、`pants`、`shoulder`、`belt`、`shoes`、`earring`、`ring`、`necklace` |
+| EquipRarity / ItemRarity | `common`、`advanced`、`fine`、`legendary`、`epic`、`mythic` |
+| ElementType | `fire`、`ice`、`lightning`、`poison`、`physical` |
+| WeatherType | `clear`、`rain`、`sandstorm`、`thunderstorm`、`snow`、`acid_rain`、`radiation`、`fog`、`heat_wave` |
+| SetBonusId | `wasteland_ranger`、`tech_soldier`、`mutant_hunter`、`survivor`、`raider`、`wasteland_destroyer` |
+
+核心实体接口包括 `Player`、`Bullet`、`Enemy`、`DropItem`、`Particle`、`DamageNumber`、`Equipment`、`ItemDef`、`Skill`、`GameState`、`Talent`、`WeatherState`、`CodexEntry`、`Achievement`、`ShopItem`、`ActiveSkill` 和 `GameConfig`。
+
+## 引擎配置
+
+| 配置项 | 当前值/规则 |
+| --- | --- |
+| canvasWidth / canvasHeight | 来自 Canvas 实际尺寸，resize 时同步更新 |
+| playerStartX | 14 |
+| playerStartY | 根据画布高度、groundY 和战斗区中心计算 |
+| groundY | canvas.height * 0.65 - 20 |
+| baseEnemyCount | 11，旧配置字段；当前实际波次数量由 getWaveEnemyCount 返回 49 或 50 |
+| maxEnemyCount | 30，旧配置字段；当前实际波次数量由 getWaveEnemyCount 控制 |
+| eliteWaveInterval | 5 |
+| bossWaveInterval | 8 |
+| spawnZoneWidth | 10 |
+| 对象池大小 | Bullet 150、Enemy 80、DropItem 50、Particle 150、DamageNumber 60 |
+| 主角帧序列 | idle 6 帧，shoot 4 帧，64×64，锚点 14/18 |
+
+## 玩家初始数据
+
+| 字段 | 初始值 |
+| --- | --- |
+| x | playerStartX |
+| y | playerStartY |
+| width / height | 14 / 32 |
+| health / maxHealth | 100 / 100 |
+| level | 1 |
+| exp | 0 |
+| expToNextLevel | Math.floor((25 + level^1.45 * 5.5 + level * 3.5) * 5) |
+| attack | 8 |
+| attackSpeed | 1000ms |
+| manualAttackSpeed | 1000ms |
+| range | 400 |
+| score / skillPoints / gold | 0 / 0 / 0 |
+| dodgeCooldown / dodgeTimer / invincibleTimer | 0 / 0 / 0 |
+
+初始背包为 `health_potion ×5`、`attack_boost ×3`、`speed_boost ×3`、`bomb ×2`、`magnet ×2`。初始装备为空，玩家需要通过掉落、商店或调试功能获得装备。
+
+## 战斗循环
+
+`start` 启动主循环，`requestAnimationFrame` 每帧调用 `update` 和 `render`。暂停或游戏结束时跳过主要逻辑更新，但仍可保持 UI 状态。
+
+主要更新顺序包括天气、星空/视差、玩家恢复与减益、技能冷却、波次刷新、射击、子弹、敌人、掉落物、碰撞、粒子、伤害数字和屏幕震动。主要渲染顺序为背景、天气、射程、掉落、玩家、无人机、分身、子弹、敌人、粒子、伤害数字、激光、闪电和护盾。
+
+## 波次规则
+
+| 规则 | 数值 |
+| --- | --- |
+| 普通波小怪数 | 50 |
+| 精英/BOSS 波小怪数 | 49 + 1 个精英或 BOSS |
+| 精英/BOSS 判定 | currentWave % eliteWaveInterval === 0 |
+| BOSS 类型判定 | currentWave % bossWaveInterval === 0 时 eliteBossNoticeType 为 boss |
+| 波次刷怪间隔 | Math.max(800, 1200 - currentWave * 30) ms |
+| 波次提示时长 | 2000ms |
+| 波间隔 | 5000ms |
+| 波次奖励 | currentWave * 100 分数 |
+
+普通怪池随波次解锁：先从 `NORMAL_ENEMY_TYPES` 的前 2 个开始，每 3 波增加一种基础怪，最多使用前 6 种基础怪。远程射手在第 3 波后以 1/3 概率加入候选池，刺客在第 5 波后加入候选池。
+
+## 敌人数据表
+
+| ID | 名称 | 类型 | 尺寸 | 基础生命 | 速度 | 伤害 | 经验 | 掉率 | 元素 | 天气 | 攻速ms | 暴击率 | 暴伤 | 穿透 | 吸血 | 射程 | 防御 | 灼烧 | 中毒 | 冰冻 | 感电 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| mutant | 变异体 | normal | 16×24 | 18 | 3.2 | 2 | 4 | 0.25 | - | - | 3000 | 0 | 100 | 0 | 0 | 30 | 3 | 0 | 0 | 0 | 0 |
+| raider | 掠夺者 | normal | 17×26 | 28 | 5.5 | 3 | 6 | 0.30 | - | - | 2500 | 2 | 110 | 0 | 0 | 35 | 2 | 0 | 0 | 0 | 0 |
+| infected | 感染者 | normal | 18×27 | 55 | 4.2 | 5 | 11 | 0.35 | - | - | 2800 | 0 | 100 | 0 | 0 | 30 | 4 | 0 | 8 | 0 | 0 |
+| brute | 暴徒 | normal | 22×29 | 140 | 2.8 | 12 | 26 | 0.42 | - | - | 3500 | 5 | 130 | 0 | 1 | 40 | 8 | 0 | 0 | 0 | 0 |
+| spider | 巨型蜘蛛 | normal | 20×18 | 20 | 7.5 | 2 | 5 | 0.32 | - | - | 2000 | 8 | 115 | 0 | 0 | 30 | 0 | 0 | 10 | 0 | 0 |
+| zombie | 丧尸 | normal | 19×28 | 95 | 1.3 | 4 | 16 | 0.38 | - | - | 4000 | 0 | 100 | 0 | 0 | 30 | 5 | 0 | 5 | 0 | 0 |
+| heavy_trooper | 重装兵 | elite | 24×32 | 350 | 2.5 | 18 | 65 | 0.75 | physical | sandstorm | 2500 | 8 | 140 | 1 | 2 | 50 | 18 | 0 | 0 | 0 | 0 |
+| mech_soldier | 机甲兵 | elite | 26×34 | 600 | 4 | 30 | 135 | 0.85 | lightning | thunderstorm | 1800 | 12 | 150 | 1 | 1 | 200 | 15 | 0 | 0 | 0 | 15 |
+| sniper_bot | 狙击机器人 | elite | 22×30 | 220 | 0.8 | 42 | 95 | 0.80 | physical | fog | 3000 | 20 | 180 | 2 | 0 | 400 | 8 | 0 | 0 | 0 | 0 |
+| war_tank | 战争坦克 | boss | 40×28 | 1800 | 1.2 | 36 | 380 | 1 | fire | heat_wave | 2000 | 15 | 160 | 2 | 3 | 300 | 28 | 20 | 0 | 0 | 0 |
+| alien_hive | 异星母巢 | boss | 35×35 | 3800 | 0.6 | 58 | 720 | 1 | poison | acid_rain | 1500 | 10 | 140 | 1 | 5 | 250 | 22 | 0 | 25 | 0 | 0 |
+| cyber_dragon | 机械巨龙 | boss | 45×40 | 7000 | 0.7 | 82 | 1900 | 1 | ice | snow | 1200 | 18 | 200 | 3 | 4 | 350 | 35 | 0 | 0 | 18 | 10 |
+
+敌人成长公式在 `resetEnemy` 中计算：血量倍率 `1.025^(wave-1)`，伤害倍率 `1.014^(wave-1)`，速度倍率 `1 + min(0.2, (wave-1)*0.002)`，经验倍率 `1.023^(wave-1)`，掉率每波增加 `0.0045`，最高不超过 `1`。
+
+## 装备系统
+
+装备槽位为 `weapon`、`armor`、`pants`、`shoulder`、`belt`、`shoes`、`earring`、`ring`、`necklace`。品质为 `common`、`advanced`、`fine`、`legendary`、`epic`、`mythic`，中文标签分别是普通、高级、精致、传说、史诗、神话。
+
+| 品质 | 颜色 | 基础属性数 | 普通词条数 | 是否强制属性攻击 | 倍率 | 耐久 | 射程上限 | 元素概率 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| common | #9A9A9A | 1 | 0 | 否 | 1 | 100 | 20 | 0 |
+| advanced | #5BA3E0 | 2 | 0 | 否 | 1.4 | 150 | 35 | 0.1 |
+| fine | #B060E0 | 3 | 0 | 否 | 1.9 | 200 | 50 | 0.2 |
+| legendary | #E08030 | 4 | 0-1 | 是 | 2.8 | 300 | 70 | 0.35 |
+| epic | #E0C040 | 4 | 1-2 | 是 | 4.0 | 400 | 85 | 0.5 |
+| mythic | #E03030 | 5 | 2 | 是 | 5.5 | 500 | 100 | 0.7 |
+
+基础属性池为 `attack`、`health`、`defense`、`critRate`、`range`、`pierce`。基础值分别是攻击 3、生命 40、防御 4、暴击率 1.5、射程 6、穿透 1。生成公式为 `floor(baseValue * rarityMult * levelMult * random(0.85, 1.15))`，其中 `levelMult = 1 + (level - 1) * 0.13`。
+
+| 词条类型 | 词条名 | 基础值/效果 |
+| --- | --- | --- |
+| attack | 强力 | 2.5 |
+| attackSpeed | 迅捷 | 4，按百分比减少攻击间隔 |
+| health | 生命 | 16 |
+| critRate | 暴击 | 1.2 |
+| critDamage | 暴伤 | 6 |
+| pierce | 物理穿透 | 1 |
+| range | 远程 | 4，受品质射程上限限制 |
+| defense | 坚固 | 1.8 |
+| lifesteal | 吸血 | 1.5 |
+| statusBurn | 灼烧附魔 | 6，附加灼烧概率和伤害 |
+| statusPoison | 剧毒附魔 | 6，附加中毒概率和伤害 |
+| statusFreeze | 冰冻附魔 | 6，附加冰冻概率 |
+| statusLightning | 雷电附魔 | 6，附加感电概率和连锁 |
+| elementalDamage | 烈焰/寒冰/雷霆/剧毒 | 16，必须有对应 elementalAttack 才生效 |
+| elementalAttack | 火焰/寒冰/雷电/毒素攻击 | 8，传说以上强制生成一个，激活对应元素伤害 |
+
+## 套装系统
+
+命名套装只会在高级和精致装备上随机出现，高级概率 5%，精致概率 15%。传说、史诗、神话不再分配命名套装，而是使用“同品质 + 同等级”的品质套装系统。
+
+| 套装ID | 名称 | 2件 | 4件 | 6件 |
+| --- | --- | --- | --- | --- |
+| wasteland_ranger | 废土游侠 | 攻击力+10% | 暴击率+5% | 攻击速度+20% |
+| tech_soldier | 科技战士 | 防御力+15% | 生命值+20% | 护盾再生 |
+| mutant_hunter | 变异猎人 | 对精英怪伤害+20% | 暴击伤害+30% | 击杀回血 |
+| survivor | 幸存者 | 拾取范围+50% | 金币获取+30% | 经验获取+25% |
+| raider | 掠夺者 | 攻击速度+10% | 攻击力+15% | 吸血+10% |
+| wasteland_destroyer | 废土毁灭者 | 攻击力+15% | 暴击伤害+40% | 攻击附带灼烧伤害 |
+
+| 品质套装 | 3件 | 6件 | 9件 |
+| --- | --- | --- | --- |
+| 传说套装 | 攻击力 +15% | 生命 +25%，防御 +15% | 暴击伤害 +50%，攻速 +15% |
+| 史诗套装 | 攻击力 +25% | 生命 +40%，防御 +25% | 暴击率 +15%，暴击伤害 +80% |
+| 神话套装 | 攻击力 +8%，攻速 +4% | 生命 +12%，防御 +8% | 全属性 +10%，每秒回 0.4% 生命 |
+
+## 掉落规则
+
+击杀敌人后，经验收益先按 `floor(enemy.exp * 0.5)` 计算。分数收益为 BOSS `baseExpGain * 100`、精英 `baseExpGain * 30`、普通 `baseExpGain * 10`。金币收益为 `floor(baseExpGain * 2)`。
+
+普通掉落判定为 `enemy.dropRate * (1 + dropBonus) * 0.25`。命中后 20% 掉生命，15% 掉金币，其余掉物品。金币掉落值为 `floor(baseExpGain * 5 * (1 + goldBonus))`。
+
+| 敌人类型 | 装备独立掉率 |
+| --- | --- |
+| normal | 普通 2%，高级 1.5%，精致 1%，传说 0.7%，史诗 0.5%，神话 0.3% |
+| elite | 传说 20%，史诗 15%，神话 10% |
+| boss | 史诗 40%，神话 20% |
+
+装备等级规则：玩家 10 级以下掉落 1 级装备；10 级以上按 `floor(playerLevel / 10) * 10` 分档，普通掉落最高 990。BOSS 装备等级为玩家当前十级档 +20，最低 1，最高 999。
+
+## 物品数据表
+
+| ID | 名称 | 品质 | 效果 | 药水类型 | 数值 | 持续ms | 冷却ms | 描述 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| health_potion | 普通血瓶 | common | heal | - | 10 | - | 3000 | 恢复10%生命值 |
+| health_potion_advanced | 高级血瓶 | advanced | heal | - | 20 | - | 6000 | 恢复20%生命值 |
+| health_potion_fine | 精致血瓶 | fine | heal | - | 35 | - | 10000 | 恢复35%生命值 |
+| health_potion_legendary | 传说血瓶 | legendary | heal | - | 50 | - | 15000 | 恢复50%生命值 |
+| health_potion_epic | 史诗血包 | epic | heal | - | 75 | - | 22000 | 恢复75%生命值 |
+| health_potion_mythic | 神话血包 | mythic | heal | - | 100 | - | 30000 | 恢复100%生命值 |
+| regen_potion | 再生药水 | advanced | regen | - | 5 | 10000 | 30000 | 10秒内每秒恢复5%生命 |
+| regen_potion_mythic | 神话再生 | mythic | regen | - | 15 | 15000 | 45000 | 15秒内每秒恢复15%生命 |
+| attack_boost | 力量药水 | advanced | attack_boost | - | 50 | 10000 | 30000 | 10秒内攻击力+50% |
+| attack_boost_mythic | 神话力量 | mythic | attack_boost | - | 100 | 15000 | 45000 | 15秒内攻击力+100% |
+| speed_boost | 敏捷药水 | advanced | speed_boost | - | 50 | 8000 | 24000 | 8秒内攻速+50% |
+| bomb | 手榴弹 | fine | bomb | - | 200 | - | 3000 | 对所有敌人造成200伤害 |
+| bomb_mythic | 核弹 | mythic | bomb | - | 1000 | - | 10000 | 对所有敌人造成1000伤害 |
+| magnet | 磁力装置 | advanced | magnet | - | - | 5000 | 15000 | 5秒内自动拾取掉落物 |
+| poison_bomb | 毒雾弹 | fine | poison | - | 10 | 5000 | 15000 | 敌人中毒5秒，每秒10伤害 |
+| freeze_bomb | 冰冻弹 | legendary | freeze | - | - | 3000 | 10000 | 冻结敌人3秒 |
+| fire_bomb | 燃烧弹 | legendary | burn | - | 20 | 5000 | 15000 | 敌人燃烧5秒，每秒20伤害 |
+| invincibility | 无敌药 | epic | invincible | - | - | 5000 | 15000 | 5秒内无敌 |
+| invincibility_mythic | 神话无敌 | mythic | invincible | - | - | 10000 | 30000 | 10秒内无敌 |
+| stun_bomb | 眩晕弹 | fine | stun | - | - | 2000 | 6000 | 使所有敌人眩晕2秒 |
+| lightning_bolt | 闪电箭 | legendary | lightning | - | 100 | 3000 | 10000 | 对所有敌人造成100伤害并感电3秒 |
+| curse_scroll | 诅咒卷轴 | epic | curse | - | 20 | 8000 | 24000 | 敌人受到伤害+20%，持续8秒 |
+| potion_attack | 力量技能药水 | fine | skill_potion | attack | - | - | 0 | 攻击+等级值，持续一回合 |
+| potion_speed | 敏捷技能药水 | fine | skill_potion | attackSpeed | - | - | 0 | 攻速+等级值%，持续一回合 |
+| potion_health | 生命技能药水 | fine | skill_potion | maxHealth | - | - | 0 | 生命+等级值*20，持续一回合 |
+| potion_crit | 暴击技能药水 | fine | skill_potion | critRate | - | - | 0 | 暴击+等级值%，持续一回合 |
+| potion_defense | 防御技能药水 | fine | skill_potion | defense | - | - | 0 | 防御+等级值，持续一回合 |
+| potion_range | 射程技能药水 | legendary | skill_potion | range | - | - | 0 | 射程+等级值*5，持续一回合 |
+| potion_laser | 激光炮药水 | legendary | skill_potion | laser | - | - | 0 | 获得激光炮效果，持续一回合 |
+| potion_flash | 闪光药水 | epic | skill_potion | flash | - | - | 0 | 使用后立即眩晕所有敌人5秒 |
+| potion_sweep | 横扫药水 | epic | skill_potion | sweep | - | - | 0 | 获得战术横扫效果，持续一回合 |
+| potion_clone | 分身药水 | mythic | skill_potion | clone | - | - | 0 | 召唤1个分身，持续一回合 |
+
+技能药水可追加等级后缀，例如 `potion_attack_lv10`。动态描述由 `getPotionEffectText` 生成：攻击 +等级值，攻速 +等级值%，生命 +等级值×20，暴击 +等级值%，防御 +等级值，射程 +等级值×5。
+
+## 技能系统
+
+技能对象字段为 `id`、`name`、`icon`、`description`、`cooldown`、`currentCooldown`、`level`、`maxLevel`、`cost`、`requiredLevel`、`requiredSkills`。技能升级会扣除技能点，降级与重置会返还技能点。
+
+| ID | 名称 | 效果 | 消耗 | 要求等级 | 前置 | 最高等级 | 冷却ms |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| atk_1 | 力量训练I | 攻击力+2.5/级 | 1 | 1 | - | 5 | 0 |
+| atk_2 | 力量训练II | 攻击力+5/级 | 3 | 20 | atk_1 | 5 | 0 |
+| atk_3 | 力量训练III | 攻击力+11/级 | 5 | 50 | atk_2 | 5 | 0 |
+| atk_4 | 狂暴之力 | 攻击力+22/级 | 8 | 80 | atk_3 | 5 | 0 |
+| atk_5 | 战神附体 | 攻击力+35/级 | 12 | 120 | atk_4 | 5 | 0 |
+| spd_1 | 敏捷训练I | 攻速+2%/级 | 1 | 1 | - | 5 | 0 |
+| spd_2 | 敏捷训练II | 攻速+2.8%/级 | 3 | 20 | spd_1 | 5 | 0 |
+| spd_3 | 疾风步 | 攻速+3.2%/级 | 5 | 50 | spd_2 | 5 | 0 |
+| spd_5 | 时间加速 | 攻速+6%/级 | 8 | 80 | spd_3 | 5 | 0 |
+| rng_4 | 鹰眼视野 | 射程+80/级 | 5 | 50 | - | 5 | 0 |
+| crit_1 | 暴击入门I | 暴击率+1%/级 | 1 | 2 | - | 5 | 0 |
+| crit_2 | 暴击入门II | 暴击率+2.2%/级 | 3 | 20 | crit_1 | 5 | 0 |
+| crit_3 | 致命一击 | 暴击率+4.5%/级 | 5 | 50 | crit_2 | 5 | 0 |
+| crit_4 | 死神之触 | 暴击率+7.5%/级 | 8 | 80 | crit_3 | 5 | 0 |
+| cdmg_1 | 暴击伤害I | 暴击伤害+8%/级 | 3 | 20 | crit_1 | 5 | 0 |
+| cdmg_2 | 暴击伤害II | 暴击伤害+20%/级 | 5 | 50 | cdmg_1,crit_2 | 5 | 0 |
+| cdmg_3 | 毁天灭地 | 暴击伤害+45%/级 | 10 | 150 | cdmg_2,crit_3 | 5 | 0 |
+| hp_1 | 生命强化I | 最大生命+25/级 | 1 | 1 | - | 5 | 0 |
+| hp_2 | 生命强化II | 最大生命+55/级 | 3 | 20 | hp_1 | 5 | 0 |
+| hp_3 | 生命强化III | 最大生命+90/级 | 5 | 50 | hp_2 | 5 | 0 |
+| hp_4 | 不灭之躯 | 最大生命+160/级 | 8 | 80 | hp_3 | 5 | 0 |
+| def_1 | 防御训练I | 减伤+2.5%/级 | 1 | 2 | - | 5 | 0 |
+| def_2 | 防御训练II | 减伤+5%/级 | 3 | 20 | def_1 | 5 | 0 |
+| def_3 | 铁壁 | 减伤+9%/级 | 5 | 50 | def_2 | 5 | 0 |
+| def_4 | 金刚不坏 | 减伤+15%/级 | 8 | 80 | def_3 | 5 | 0 |
+| regen_1 | 生命恢复I | 每秒恢复0.8%生命 | 3 | 20 | hp_1 | 5 | 0 |
+| regen_2 | 生命恢复II | 每秒恢复1.5%生命 | 5 | 50 | regen_1,hp_2 | 5 | 0 |
+| regen_3 | 生命涌动 | 每秒恢复2.5%生命 | 8 | 80 | regen_2,hp_3 | 5 | 0 |
+| magnet_1 | 磁力装置 | 拾取范围+100 | 1 | 2 | - | 5 | 0 |
+| gold_1 | 财富嗅觉 | 金币掉落+22% | 3 | 20 | - | 5 | 0 |
+| gold_2 | 寻宝达人 | 金币掉落+55% | 5 | 50 | gold_1 | 5 | 0 |
+| exp_1 | 学习能力 | 经验获取+12% | 3 | 20 | - | 5 | 0 |
+| exp_2 | 学霸 | 经验获取+30% | 5 | 50 | exp_1 | 5 | 0 |
+| drop_1 | 幸运儿 | 物品掉率+10% | 3 | 20 | - | 5 | 0 |
+| drop_2 | 欧皇附体 | 物品掉率+25% | 5 | 50 | drop_1 | 5 | 0 |
+| lightning_1 | 雷霆射击 | 攻击有2%概率触发感电，伤害链2个敌人 | 5 | 50 | spd_1 | 5 | 0 |
+| lightning_2 | 万雷天牢 | 攻击有3.5%概率触发感电，伤害链3个敌人 | 8 | 80 | lightning_1,spd_2 | 5 | 0 |
+| lifesteal_1 | 吸血打击 | 攻击回复0.3%最大生命 | 3 | 20 | hp_1 | 5 | 0 |
+| lifesteal_2 | 嗜血狂魔 | 攻击回复0.8%最大生命 | 5 | 50 | lifesteal_1,hp_2 | 5 | 0 |
+| piercing_2 | 穿云箭 | 子弹穿透4个敌人 | 5 | 50 | - | 5 | 0 |
+| fx_bullet_1 | 增加子弹数 | 连发效果，每级+1连发次数，满级连发3枪，每隔0.1秒发射一枪 | 5 | 30 | - | 2 | 0 |
+| fx_sync_1 | 同步发射 | 单次发射数增加，每级+1目标，满级单次3颗分别打最近3名敌人，受连发增益 | 6 | 40 | fx_bullet_1 | 2 | 0 |
+| fx_bomb_1 | 发射爆弹 | 每次普通攻击2%几率发射爆弹，弹道速度为普攻1/3，命中时对直径内敌人造成（Lv*攻击力）伤害，每级+5px范围 | 6 | 40 | fx_bullet_1 | 5 | 0 |
+| fx_burn_1 | 爆弹灼烧 | 需学习发射爆弹。对爆弹命中敌人造成固定灼烧伤害，每级提升伤害 | 8 | 60 | fx_bomb_1 | 5 | 0 |
+| fx_freeze_1 | 冰冻弹 | 每次普通攻击2%几率发射冰冻弹，弹道速度为普攻1/2，命中时1%几率冰冻3秒，每级+2%发射几率和1%冰冻几率 | 6 | 40 | fx_bullet_1 | 5 | 0 |
+| fx_poison_1 | 毒气弹 | 每次普通攻击10%几率发射毒气弹，弹道速度为普攻1/4，命中时使30px范围内敌人中毒，每秒造成（Lv*攻击力）伤害，每级提升伤害 | 6 | 40 | fx_bullet_1 | 5 | 0 |
+| fx_shock_1 | 电击弹 | 每次普通攻击5%几率发射50px波浪线电击弹（内置5秒CD），命中后连锁2个敌人造成（Lv*攻击力）伤害，每级+5%几率和连锁范围 | 6 | 40 | - | 5 | 0 |
+| fx_laser_1 | 激光炮 | 发射持续5秒激光，对直线敌人造成10次伤害，总伤害为（Lv*攻击力），分身减半同步发射，每级+20%激光大小 | 8 | 60 | fx_bullet_1 | 3 | 30000 |
+| fx_flash_1 | 全屏闪光 | 使所有敌人眩晕5秒，冷却50秒 | 15 | 100 | fx_laser_1 | 1 | 50000 |
+| fx_grenade_1 | 榴弹发射 | 从后背发射榴弹，每级+1颗，每颗榴弹冷却1秒，抛物线轨迹 | 8 | 60 | fx_bullet_1 | 3 | 0 |
+| fx_clone_grenade_1 | 分身榴弹 | 分身同步发射榴弹，橙色拖尾，非前置技能 | 12 | 200 | - | 3 | 0 |
+| fx_clone_shock_1 | 分身电击 | 分身同步发射电击弹，非前置技能 | 12 | 260 | - | 3 | 0 |
+| clone_1 | 召唤分身 | 在角色正上方和正下方召唤队友输出，每级召唤1个 | 12 | 160 | - | 2 | 0 |
+| clone_bullet_1 | 分身增弹 | 分身连发效果，每级+1连发次数，满级2连发 | 8 | 180 | clone_1 | 2 | 0 |
+| clone_sync_1 | 分身同步 | 分身单次发射数增加，每级+1目标，满级3颗分别打最近3名敌人，受连发增益 | 10 | 220 | clone_bullet_1 | 2 | 0 |
+| clone_sweep | 战术横扫 | 10秒内连发翻倍（4*2=8），冰冻弹/爆弹/毒气弹100%发射，榴弹翻倍发射，分身也生效，冷却100秒 | 20 | 300 | clone_sync_1,fx_flash_1 | 1 | 100000 |
+
+技能树布局分为三组：右侧属性树 `SKILL_TREE_LAYERS`，左侧特效树 `FX_SKILL_TREE_LAYERS`，底部分身树 `CLONE_SKILL_TREE_LAYERS`。
+
+## 主动技能
+
+| ID | 名称 | 按键 | 冷却 | 说明 |
+| --- | --- | --- | --- | --- |
+| dodge | 翻滚闪避 | Q | 5000ms | 快速翻滚闪避，短暂无敌 |
+| grenade | 手雷投掷 | E | 8000ms | 投掷手雷造成范围爆炸伤害 |
+| drone | 攻击无人机 | R | 20000ms | 召唤无人机协助攻击10秒 |
+
+## 属性计算
+
+玩家属性由基础值、装备主属性、装备词条、品质套装、技能、天赋、技能药水共同计算。等级额外提供 `(level - 1) * 0.012` 的攻击和生命倍率。
+
+射程上限为战场宽度的 95%，受减益时最低保留战场宽度的 25%。攻速统一按攻击间隔计算，间隔最低 400ms；攻速提升通过减少攻击间隔生效。
+
+| 属性来源 | 关键规则 |
+| --- | --- |
+| 装备 attack/health/defense/critRate/critDamage/range/pierce | 直接累加到玩家属性 |
+| 装备 attackSpeed 词条 | attackSpeed = floor(attackSpeed * (1 - value / 100)) |
+| elementalDamage | 必须拥有对应 elementalAttack 才加入 elementalDamageBonus |
+| statusFreeze | 增加冰冻概率，减速量至少 50，持续至少 2000ms |
+| statusPoison / statusBurn | 增加状态概率，伤害为 value * 1.5，持续至少 3000ms |
+| statusLightning | 增加感电概率，连锁数至少 3，伤害为 value * 1.5 |
+| 品质套装 allStats | 攻击、生命、防御按百分比提升 |
+| 神话 9 件套 | 每秒恢复 0.4% 最大生命 |
+
+## 天赋数据
+
+升级后会从未拥有天赋中随机抽取最多 3 个选项。
+
+| ID | 名称 | 稀有度 | 效果 | 数值 | 属性 |
+| --- | --- | --- | --- | --- | --- |
+| bullet_bounce | 子弹反弹 | rare | 子弹有20%几率在命中后反弹 | 20 | special |
+| kill_heal | 击杀回血 | common | 击杀敌人恢复2%生命 | 2 | special |
+| atk_speed_up | 攻速提升 | common | 攻击速度+15% | 15 | attackSpeed |
+| atk_up | 攻击强化 | common | 攻击力+25 | 25 | attack |
+| crit_up | 暴击率提升 | rare | 暴击率+8% | 8 | critRate |
+| cdmg_up | 暴击伤害 | rare | 暴击伤害+30% | 30 | critDamage |
+| hp_up | 生命强化 | common | 最大生命+50 | 50 | health |
+| def_up | 护甲提升 | common | 减伤+10% | 10 | defense |
+| range_up | 射程扩展 | common | 射程+100 | 100 | range |
+| gold_magnet | 财富磁铁 | rare | 金币掉落+50% | 50 | goldBonus |
+| exp_boost | 快速学习 | rare | 经验获取+30% | 30 | expBonus |
+| regen_aura | 再生光环 | legendary | 每秒恢复1%生命 | 1 | regenPerSec |
+| multishot_talent | 多重射击 | legendary | 额外发射1发子弹 | 1 | special |
+| piercing | 穿透射击 | legendary | 子弹可穿透1个敌人 | 1 | special |
+
+## 天气与减益
+
+天气初始为 `clear`，持续 30000ms。射击逻辑已对沙尘暴、雪、雾、热浪做了直接修正：沙尘暴射程乘 2/3，雪天气攻速倍率 2/3，雾天气射程乘 0.7，热浪攻速倍率 0.85。
+
+精英和 BOSS 可通过 `applyEliteBossDebuff` 对玩家施加攻击间隔、子弹速度、射程和定身等影响。玩家被定身时自动射击和手动射击都会被阻止。
+
+## 成就数据
+
+| ID | 名称 | 目标 | 奖励 |
+| --- | --- | --- | --- |
+| first_blood | 初次击杀 | 击杀第一个敌人 | 金币 +100 |
+| kill_10 | 小试牛刀 | 累计击杀10个敌人 | 金币 +300 |
+| kill_100 | 百人斩 | 累计击杀100个敌人 | 金币 +1000 |
+| kill_500 | 杀戮机器 | 累计击杀500个敌人 | 金币 +3000 |
+| wave_5 | 幸存者 | 存活到第5波 | 金币 +500 |
+| wave_10 | 坚韧不拔 | 存活到第10波 | 金币 +2000 |
+| wave_20 | 废土传说 | 存活到第20波 | 金币 +5000 |
+| boss_slayer | Boss杀手 | 击败第一个Boss | 金币 +1500 |
+| elite_hunter | 精英猎手 | 击杀10个精英怪 | 金币 +800 |
+| single_wave_50 | 清场专家 | 单波次击杀50个敌人 | 金币 +600 |
+| equip_legendary_get | 传说降临 | 获得第一件传说装备 | 金币 +500 |
+| level_10 | 初露锋芒 | 角色达到10级 | 技能点 +3 |
+
+## 图鉴数据
+
+图鉴自动根据 `ENEMY_CONFIGS` 创建敌人条目，另有 6 个装备品质条目和 8 个基础物品条目。敌人被发现或击杀时更新 `discovered` 和 `kills`，装备和物品获取时更新 `obtained`。
+
+## 商店系统
+
+商店由 `openShop` 触发，`generateShopItems` 生成商品，`buyShopItem` 购买，`refreshShop` 刷新。商品类型包括物品、装备和补给，价格随物品类型、装备品质、装备等级和刷新逻辑计算。
+
+## 存档系统
+
+`saveGame` 和 `loadGame` 使用 `localStorage` 保存玩家、装备、仓库、背包、技能、图鉴、成就、击杀数、最高波次等数据。波次结束时会自动保存，高分使用 `shotsGameHighScore` 单独记录。
+
+## 调试能力
+
+`DebugPanel` 可通过引擎公开方法修改战斗环境，包括生成普通沙袋、怪物沙袋、重置技能冷却、学习所有技能、学习特效技能、学习属性技能、学习分身技能、升到 100 级、增加技能点、增减金币、设置基础属性和战力权重等。
+
+## 工具函数
+
+`src/game/utils.ts` 提供 `getNextId`、`checkCollision`、`clamp`、`lerp`、`distance`、`randomRange`、`randomInt` 和通用 `ObjectPool`。对象池通过 `acquire`、`release`、`getActive`、`getAll`、`clear` 管理实体复用。
+
+实体工厂包括 `createBullet`、`resetBullet`、`createEnemy`、`createDropItem`、`createParticle`、`createDamageNumber`。子弹默认尺寸 12×6、速度 500、伤害 10；掉落物默认 16×16；粒子默认尺寸 3。
+
+## 引擎方法清单
+
+| 功能域 | 可见性 | 方法 |
+| --- | --- | --- |
+| 核心 | private | addPlayerBuff |
+| 核心 | public | constructor |
+| 核心 | private | createPlayer |
+| 核心 | private | createGameState |
+| 初始化 | private | initStars |
+| 初始化 | private | initParallaxLayers |
+| 初始化 | private | initSprites |
+| 初始化 | private | initWeather |
+| 初始化 | private | initActiveSkills |
+| 初始化 | private | initCodex |
+| 查询/计算 | private | getEnemyDescription |
+| 初始化 | private | initAchievements |
+| 敌人 | private | discoverEnemy |
+| 敌人 | private | addEnemyKill |
+| 装备 | private | addEquipmentObtained |
+| 掉落/背包 | private | addItemObtained |
+| 核心 | private | notifyCodexChange |
+| 核心 | private | checkAchievements |
+| 核心 | private | unlockAchievement |
+| 敌人 | private | resetEnemy |
+| 掉落/背包 | private | resetDropItem |
+| 核心 | private | resetParticle |
+| 核心 | private | resetDamageNumber |
+| 战力计算 | private | calculatePlayerStats |
+| 核心 | public | start |
+| 核心 | public | stop |
+| 核心 | public | pause |
+| 核心 | public | resume |
+| 核心 | public | restartCurrentWave |
+| 更新 | private | update |
+| 更新 | private | updatePlayerRegen |
+| 更新 | private | updatePlayerDebuffs |
+| 敌人 | private | applyEliteBossDebuff |
+| 查询/计算 | private | getPlayerDebuffMultiplier |
+| 核心 | private | isPlayerStunned |
+| 更新 | private | updateStars |
+| 更新 | private | updateParallax |
+| 更新 | private | updateWeather |
+| 生成 | private | spawnWeatherParticle |
+| 更新 | private | updateWeatherParticles |
+| 核心 | private | applyWeatherEffects |
+| 更新 | private | updateActiveSkills |
+| 更新 | private | updateDodge |
+| 更新 | private | updateDrone |
+| 查询/计算 | private | getCloneCount |
+| 查询/计算 | private | getClonePositions |
+| 更新 | private | updateClones |
+| 更新 | private | updateBuffs |
+| 查询/计算 | private | getBuffValue |
+| 更新 | private | updateSkills |
+| 更新 | private | updateWave |
+| 查询/计算 | private | getWaveEnemyCount |
+| 查询/计算 | private | getWaveTotalCount |
+| 查询/计算 | private | getWaveRemainingCount |
+| 核心 | private | startWave |
+| 核心 | private | endWave |
+| 生成 | private | spawnEnemy |
+| 生成 | private | spawnElite |
+| 生成 | private | spawnBoss |
+| 更新 | private | updateShooting |
+| 核心 | public | manualShoot |
+| 核心 | private | shoot |
+| 更新 | private | updateBullets |
+| 更新 | private | updateEnemies |
+| 更新 | private | updateBossSkills |
+| 更新 | private | updateRangedShooterAttack |
+| 核心 | private | fireRangedShooterProjectile |
+| 核心 | private | explodeAssassin |
+| 技能 | private | bossUseSkill |
+| 更新 | private | updateDrops |
+| 掉落/背包 | private | pickupDrop |
+| 核心 | private | addExp |
+| 掉落/背包 | private | addToInventory |
+| 装备 | public | equipItem |
+| 核心 | public | addToStorage |
+| 核心 | public | removeFromStorage |
+| 掉落/背包 | public | removeFromInventory |
+| 装备 | public | decomposeEquipment |
+| 装备 | public | decomposeAllCommon |
+| 商店 | public | openShop |
+| 商店 | public | closeShop |
+| 商店 | public | isShopOpen |
+| 查询/计算 | public | getShopItems |
+| 商店 | private | generateShopItems |
+| 商店 | public | buyShopItem |
+| 商店 | public | refreshShop |
+| 技能 | public | upgradeSkill |
+| 技能 | public | downgradeSkill |
+| 技能 | public | resetSkills |
+| 更新 | private | updateParticles |
+| 更新 | private | updateDamageNumbers |
+| 更新 | private | updateScreenShake |
+| 敌人 | private | buildEnemyGrid |
+| 查询/计算 | private | getNearbyEnemies |
+| 核心 | private | checkCollisions |
+| 敌人 | private | damageEnemy |
+| 敌人 | private | applySingleEnemyDebuff |
+| 核心 | private | chainLightning |
+| 敌人 | private | killEnemy |
+| 装备 | private | rollEquipmentDrops |
+| 查询/计算 | private | getDropItemPool |
+| 查询/计算 | private | getItemDropWeight |
+| 装备 | private | generateRandomEquipment |
+| 查询/计算 | private | getDropLevel |
+| 查询/计算 | private | getBossDropLevel |
+| 查询/计算 | private | getDropRarity |
+| 查询/计算 | private | getRarityColor |
+| 查询/计算 | private | getRarityBgLight |
+| 查询/计算 | private | getRarityBgDark |
+| 使用/技能 | public | useItem |
+| 掉落/背包 | public | batchSellItems |
+| 使用/技能 | private | useSkillPotion |
+| 核心 | public | addGold |
+| 装备 | public | syncEquipmentState |
+| 生成 | public | spawnSandbags |
+| 核心 | public | destroySandbags |
+| 生成 | public | spawnMonsterSandbag |
+| 核心 | public | destroyMonsterSandbags |
+| 技能 | public | resetSkillCooldowns |
+| 技能 | private | learnSkillsByFilter |
+| 技能 | public | learnAllSkills |
+| 技能 | public | learnAllFxSkills |
+| 技能 | public | learnAllStatSkills |
+| 技能 | public | learnAllCloneSkills |
+| 核心 | public | levelUpTo100 |
+| 技能 | public | addSkillPoints |
+| 查询/计算 | public | getDebugConfig |
+| 核心 | public | saveGame |
+| 核心 | public | loadGame |
+| 调试/设置 | public | setBaseStats |
+| 调试/设置 | public | setPowerWeights |
+| 调试/设置 | public | setEnemyPowerWeights |
+| 查询/计算 | public | getPlayerStats |
+| 调试/设置 | public | setPlayerStats |
+| 战力计算 | public | calcPower |
+| 查询/计算 | public | getPowerCalcProcess |
+| 查询/计算 | public | getEnemyStats |
+| 调试/设置 | public | setEnemyStats |
+| 战力计算 | public | calcEnemyPower |
+| 查询/计算 | public | getEnemyPowerCalcProcess |
+| 敌人 | private | applyEnemyDebuff |
+| 核心 | private | bombAllEnemies |
+| 核心 | private | stunAllEnemies |
+| 核心 | private | lightningStrikeAll |
+| 使用/技能 | public | useSkill |
+| 使用/技能 | public | useActiveSkill |
+| 核心 | private | throwGrenade |
+| 核心 | private | explodeGrenade |
+| 核心 | private | fireGrenade |
+| 查询/计算 | private | getSortedRightEnemies |
+| 核心 | private | activateDrone |
+| 核心 | public | selectTalent |
+| 核心 | private | rollTalentChoices |
+| 查询/计算 | private | getAllTalents |
+| 查询/计算 | public | getActiveSkills |
+| 查询/计算 | public | getItemCooldowns |
+| 查询/计算 | public | getTalentChoices |
+| 核心 | public | isTalentSelectionOpen |
+| 查询/计算 | public | getWeather |
+| 查询/计算 | public | getBuffs |
+| 查询/计算 | public | getCodexEntries |
+| 查询/计算 | public | getAchievements |
+| 查询/计算 | public | getStats |
+| 核心 | public | resize |
+| 渲染 | private | render |
+| 渲染 | private | renderBackground |
+| 渲染 | private | renderRuinedSkyline |
+| 渲染 | private | renderGroundCracks |
+| 渲染 | private | renderGroundDebris |
+| 渲染 | private | renderChimneySmoke |
+| 渲染 | private | renderParallaxBuildings |
+| 渲染 | private | renderWeatherParticles |
+| 渲染 | private | renderWeatherOverlay |
+| 渲染 | private | renderRangeIndicator |
+| 渲染 | private | renderPlayer |
+| 渲染 | private | renderDrone |
+| 渲染 | private | renderClones |
+| 渲染 | private | renderBullets |
+| 渲染 | private | renderNormalBullet |
+| 渲染 | private | renderFreezeBullet |
+| 渲染 | private | renderBombBullet |
+| 渲染 | private | renderPoisonBullet |
+| 渲染 | private | renderWaveBullet |
+| 渲染 | private | renderEnemies |
+| 渲染 | private | renderMutant |
+| 渲染 | private | renderRaider |
+| 渲染 | private | renderInfected |
+| 渲染 | private | renderBrute |
+| 渲染 | private | renderHeavyTrooper |
+| 渲染 | private | renderMechSoldier |
+| 渲染 | private | renderWarTank |
+| 渲染 | private | renderAlienHive |
+| 渲染 | private | renderRangedShooter |
+| 渲染 | private | renderAssassin |
+| 渲染 | private | renderSandbag |
+| 渲染 | private | renderEnemyHealthBar |
+| 渲染 | private | renderDrops |
+| 渲染 | private | renderParticles |
+| 渲染 | private | renderDamageNumbers |
+| 渲染 | private | renderLaser |
+| 渲染 | private | renderFlashLightning |
+| 渲染 | private | renderShield |
+| 渲染 | private | renderNeonCityline |
+| 渲染 | private | renderArenaPlatform |
+| 渲染 | private | renderTechGrid |
+| 渲染 | private | renderTechParticles |
+| 渲染 | private | renderNeonBeams |
+
+## 资源说明
+
+主角动画使用 `public/assets/player_frames/player_idle_sheet.png` 和 `public/assets/player_frames/player_shoot_sheet.png`。当前帧配置为 64×64，待机 6 帧，射击 4 帧，配置文件为 `public/assets/player_frames/player_animation.json`。
+
+UI 图片资源分布在 `public/assets/ui`、`public/assets/ui2`、`public/assets/ui3`、`public/assets/ui_final`。当前项目还保留了多个资源生成脚本，例如 `generate_sprites.cjs`、`generate_ui_final.cjs`、`generate_ui_sprites.cjs`、`generate_ui_v2.cjs`、`generate_ui_v3.cjs`。
+
+## 已知注意点
+
+原始 `.trae/documents/technical-architecture.md` 中描述过 `systems`、`entities`、React Context 和 reducer 目录，但当前代码实际采用单体 `GameEngine.ts`、Zustand 和组件直连引擎的实现。维护时应以 `src` 下的实际代码为准。
+
+`Home.tsx` 当前返回空 `div`，主应用入口由 `App.tsx` 承担。部分组件如 `OfflineRewardModal`、`ActiveSkillBar`、`SkillBar` 存在于组件目录中，但当前未在 `App.tsx` 主布局直接挂载。

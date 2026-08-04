@@ -1,0 +1,50 @@
+# ===== 前端 (ShotsGameWeb) =====
+node_modules/
+dist/
+dist-ssr/
+*.local
+.vite/
+
+# ===== 后端 (ShotsGameWebApi) =====
+bin/
+obj/
+*.dll
+*.pdb
+*.exe
+*.cache
+*.runtimeconfig.json
+*.deps.json
+*.AssemblyInfo.cs
+*.GlobalUsings.g.cs
+*.GeneratedMSBuildEditorConfig.editorconfig
+*.csprojAssemblyReference.cache
+*.csproj.CoreCompileInputs.cache
+*.csproj.FileListAbsolute.txt
+*.assets.cache
+*.genruntimeconfig.cache
+*.NETCoreApp,Version=*.AssemblyAttributes.cs
+
+# ===== IDE / 编辑器 =====
+.vs/
+.idea/
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+.vscode/
+
+# ===== 数据库 / 日志 =====
+*.db
+*.db-shm
+*.db-wal
+*.log
+logs/
+
+# ===== 系统 =====
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ===== Trae / 临时 =====
+.trae/cache/
+*.tmp

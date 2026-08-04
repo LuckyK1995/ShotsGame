@@ -1,0 +1,18 @@
+{
+  "frameWidth": 64,
+  "frameHeight": 64,
+  "anchorX": 14,
+  "anchorY": 18,
+  "animations": {
+    "idle": {
+      "sheet": "/assets/player_frames/player_idle_sheet.png",
+      "frames": 6,
+      "fps": 8
+    },
+    "shoot": {
+      "sheet": "/assets/player_frames/player_shoot_sheet.png",
+      "frames": 4,
+      "fps": 18
+    }
+  }
+}
