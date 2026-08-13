@@ -20,7 +20,20 @@ const neonText: React.CSSProperties = {
 };
 
 interface EngineRef {
-  current: unknown;
+  current: {
+    createHorseRaceSession?: () => Promise<{
+      sessionId: string;
+      horses: Array<{ id: number; name: string; color: string; odds: number }>;
+    } | null>;
+    placeHorseBet?: (horseId: number, amount: number) => Promise<boolean>;
+    cancelHorseBet?: (horseId: number) => Promise<boolean>;
+    startHorseRace?: () => Promise<{ success: boolean; countdown: number } | null>;
+    getHorseRaceResult?: () => Promise<{
+      champion: { id: number; name: string; color: string; odds: number } | null;
+      goldWon: number;
+      rounds: Array<{ round: number; horses: any[]; winners: any[]; status: string }>;
+    } | null>;
+  } | null;
 }
 
 interface HorseRacingPanelProps {
@@ -79,6 +92,7 @@ export function HorseRacingPanel({ engineRef, isOpen, onClose }: HorseRacingPane
 
   const resetRace = () => {
     clearTimer();
+    // 立即重置为本地会话（保证 UI 即时响应）
     sessionRef.current = generateRaceSession();
     phaseRef.current = 'betting';
     currentRoundRef.current = 0;
@@ -88,6 +102,29 @@ export function HorseRacingPanel({ engineRef, isOpen, onClose }: HorseRacingPane
     goldWonRef.current = 0;
     setSelectedHorse(null);
     forceUpdate();
+    // 尝试创建服务端会话；成功则用服务端马匹覆盖本地
+    void (async () => {
+      try {
+        const result = await engineRef.current?.createHorseRaceSession?.();
+        if (result && result.horses && result.horses.length > 0) {
+          const serverHorses: Horse[] = result.horses.map(h => ({ ...h, emoji: '' }));
+          sessionRef.current = {
+            ...sessionRef.current,
+            horses: serverHorses,
+            rounds: [
+              { ...sessionRef.current.rounds[0], horses: [...serverHorses], winners: [], status: 'idle' },
+              { ...sessionRef.current.rounds[1], horses: [], winners: [], status: 'idle' },
+              { ...sessionRef.current.rounds[2], horses: [], winners: [], status: 'idle' },
+            ],
+            champion: null,
+            goldWon: 0,
+          };
+          forceUpdate();
+        }
+      } catch (e) {
+        // 保持本地会话
+      }
+    })();
   };
 
   // 根据当前状态启动下一轮
@@ -112,13 +149,18 @@ export function HorseRacingPanel({ engineRef, isOpen, onClose }: HorseRacingPane
     phaseRef.current = 'racing';
     forceUpdate();
 
+    // 第一轮开始时通知服务端开始比赛（fire-and-forget）
+    if (currentRoundRef.current === 0) {
+      void engineRef.current?.startHorseRace?.().catch(() => {});
+    }
+
     timeoutRef.current = setTimeout(() => {
       // 获取当前轮的马匹
       const roundIdx = currentRoundRef.current;
       const round = sessionRef.current.rounds[roundIdx];
       const horses = round.horses;
 
-      // 严格二叉树对阵
+      // 严格二叉树对阵（本地模拟，用于二叉树可视化）
       const winners: Horse[] = [];
       for (let i = 0; i < horses.length; i += 2) {
         const a = horses[i];
@@ -133,29 +175,56 @@ export function HorseRacingPanel({ engineRef, isOpen, onClose }: HorseRacingPane
       }
 
       // 更新回合胜者
-      sessionRef.current.rounds[roundIdx] = { 
-        ...round, 
-        winners, 
-        status: 'done' 
+      sessionRef.current.rounds[roundIdx] = {
+        ...round,
+        winners,
+        status: 'done'
       };
 
-      // 如果是最后一轮（决赛），直接结束并计算奖励
+      // 如果是最后一轮（决赛），尝试从服务端获取结果
       if (roundIdx === 2) {
-        const champion = winners[0];
-        sessionRef.current.champion = champion;
-        phaseRef.current = 'finished';
+        // 保持 'racing' 阶段直到服务端结果返回，避免空冠军闪现
+        void (async () => {
+          let champion: Horse | null = null;
+          let won = 0;
+          let serverResultUsed = false;
 
-        // 计算奖励（静默发放，不显示中奖信息）
-        const betRecords: BetRecord[] = Object.entries(betsRef.current).map(([horseId, amount]) => ({
-          horseId: parseInt(horseId),
-          amount,
-        }));
-        const { goldWon: won } = calcWinnings(betRecords, champion.id, sessionRef.current.horses);
-        goldWonRef.current = won;
-        
-        if (won > 0) {
-          addGold(won);
-        }
+          try {
+            const result = await engineRef.current?.getHorseRaceResult?.();
+            if (result && result.champion) {
+              champion = { ...result.champion, emoji: '' };
+              won = result.goldWon || 0;
+              serverResultUsed = true;
+              // 用服务端冠军覆盖本地决赛胜者，保持二叉树一致
+              sessionRef.current.rounds[2] = {
+                ...sessionRef.current.rounds[2],
+                winners: [champion],
+              };
+            }
+          } catch (e) {
+            // 回退到本地
+          }
+
+          if (!serverResultUsed) {
+            // 回退：使用本地模拟的冠军与奖金
+            champion = winners[0];
+            const betRecords: BetRecord[] = Object.entries(betsRef.current).map(([horseId, amount]) => ({
+              horseId: parseInt(horseId),
+              amount,
+            }));
+            const { goldWon: localWon } = calcWinnings(betRecords, champion.id, sessionRef.current.horses);
+            won = localWon;
+            if (won > 0) {
+              addGold(won);
+            }
+          }
+          // 服务端结果：GameEngine.getHorseRaceResult() 内部已调用 addGold，不再重复发放
+
+          sessionRef.current.champion = champion;
+          goldWonRef.current = won;
+          phaseRef.current = 'finished';
+          forceUpdate();
+        })();
       } else {
         // 将胜者填入下一轮
         const nextIdx = roundIdx + 1;
@@ -164,8 +233,8 @@ export function HorseRacingPanel({ engineRef, isOpen, onClose }: HorseRacingPane
           horses: winners,
         };
         phaseRef.current = 'highlight';
+        forceUpdate();
       }
-      forceUpdate();
     }, 1500);
   };
 
@@ -185,8 +254,36 @@ export function HorseRacingPanel({ engineRef, isOpen, onClose }: HorseRacingPane
     return () => clearTimer();
   }, []);
 
-  // 下注逻辑：加注时即时扣金币，减注时即时退还金币
-  const handlePresetBet = (horseId: number, delta: number) => {
+  // 面板打开时尝试创建服务端会话；失败则保持已有本地会话
+  useEffect(() => {
+    if (!isOpen) return;
+    if (phaseRef.current !== 'betting') return; // 比赛中不重置
+    void (async () => {
+      try {
+        const result = await engineRef.current?.createHorseRaceSession?.();
+        if (result && result.horses && result.horses.length > 0) {
+          const serverHorses: Horse[] = result.horses.map(h => ({ ...h, emoji: '' }));
+          sessionRef.current = {
+            ...sessionRef.current,
+            horses: serverHorses,
+            rounds: [
+              { ...sessionRef.current.rounds[0], horses: [...serverHorses], winners: [], status: 'idle' },
+              { ...sessionRef.current.rounds[1], horses: [], winners: [], status: 'idle' },
+              { ...sessionRef.current.rounds[2], horses: [], winners: [], status: 'idle' },
+            ],
+            champion: null,
+            goldWon: 0,
+          };
+          forceUpdate();
+        }
+      } catch (e) {
+        // 保持本地会话
+      }
+    })();
+  }, [isOpen, engineRef]);
+
+  // 下注逻辑：优先调用服务端 placeHorseBet；失败则回退到本地 addGold 扣/退金币
+  const handlePresetBet = async (horseId: number, delta: number) => {
     const currentBet = betsRef.current[horseId] || 0;
     const newAmount = Math.max(0, currentBet + delta);
     const actualDelta = newAmount - currentBet; // 正=加注扣金币，负=减注退金币
@@ -201,10 +298,24 @@ export function HorseRacingPanel({ engineRef, isOpen, onClose }: HorseRacingPane
         showToast(`单匹最高下注 ${BET_MAX}`, neonRed);
         return;
       }
-      addGold(-actualDelta);
-    } else if (actualDelta < 0) {
-      // 减注：退还差额金币
-      addGold(-actualDelta);
+    }
+
+    if (actualDelta !== 0) {
+      // 尝试服务端下注（delta 为变化量）
+      let serverOk = false;
+      try {
+        serverOk = !!(await engineRef.current?.placeHorseBet?.(horseId, delta));
+      } catch (e) {
+        serverOk = false;
+      }
+      // 服务端失败：回退到本地金币处理
+      if (!serverOk) {
+        if (actualDelta > 0) {
+          addGold(-actualDelta);
+        } else if (actualDelta < 0) {
+          addGold(-actualDelta);
+        }
+      }
     }
 
     if (newAmount === 0) {
@@ -218,10 +329,22 @@ export function HorseRacingPanel({ engineRef, isOpen, onClose }: HorseRacingPane
     forceUpdate();
   };
 
-  const handleClearBets = () => {
-    // 清空下注时全额退还已扣金币
-    if (totalBetRef.current > 0) {
-      addGold(totalBetRef.current);
+  const handleClearBets = async () => {
+    if (totalBetRef.current <= 0) return;
+    // 逐个尝试服务端取消押注；失败的押注本地退还金币
+    const entries = Object.entries(betsRef.current);
+    for (const [horseIdStr, amount] of entries) {
+      const horseId = parseInt(horseIdStr);
+      let serverOk = false;
+      try {
+        serverOk = !!(await engineRef.current?.cancelHorseBet?.(horseId));
+      } catch (e) {
+        serverOk = false;
+      }
+      if (!serverOk) {
+        // 服务端取消失败：本地退还该笔押注金币
+        addGold(amount);
+      }
     }
     betsRef.current = {};
     totalBetRef.current = 0;

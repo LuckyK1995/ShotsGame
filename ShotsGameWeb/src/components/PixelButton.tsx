@@ -19,7 +19,6 @@ const btnBaseStyle: React.CSSProperties = {
   background: 'transparent',
   border: 'none',
   cursor: 'pointer',
-  flexShrink: 0,
 };
 
 const circleBaseStyle: React.CSSProperties = {

@@ -74,7 +74,7 @@ public class MailController : AppControllerBase
     /// <param name="input">发送邮件参数，包含收件人 ID、主题、正文、附件</param>
     /// <returns>发送结果（成功或失败）</returns>
     [HttpPost("send")]
-    public async Task<IActionResult> SendMailAsync(SendMailInput input)
+    public async Task<IActionResult> SendMailAsync([FromBody] SendMailInput input)
     {
         var playerId = GetCurrentUserId();
         if (string.IsNullOrEmpty(playerId))
@@ -97,7 +97,7 @@ public class MailController : AppControllerBase
     /// <param name="input">已读参数，包含目标邮件 ID 列表</param>
     /// <returns>标记已读结果（成功或失败）</returns>
     [HttpPost("read")]
-    public async Task<IActionResult> MarkReadAsync(ReadMailInput input)
+    public async Task<IActionResult> MarkReadAsync([FromBody] ReadMailInput input)
     {
         var playerId = GetCurrentUserId();
         if (string.IsNullOrEmpty(playerId))
@@ -120,7 +120,7 @@ public class MailController : AppControllerBase
     /// <param name="input">领取邮件参数，包含目标邮件 ID</param>
     /// <returns>领取结果 ClaimAllOutput（含获得的全部奖励物品）</returns>
     [HttpPost("claim")]
-    public async Task<IActionResult> ClaimAttachmentsAsync(ClaimMailInput input)
+    public async Task<IActionResult> ClaimAttachmentsAsync([FromBody] ClaimMailInput input)
     {
         var playerId = GetCurrentUserId();
         if (string.IsNullOrEmpty(playerId))
@@ -165,7 +165,7 @@ public class MailController : AppControllerBase
     /// <param name="input">删除参数，包含待删除邮件 ID 列表</param>
     /// <returns>删除结果（成功或失败）</returns>
     [HttpDelete("delete")]
-    public async Task<IActionResult> DeleteMailsAsync(DeleteMailInput input)
+    public async Task<IActionResult> DeleteMailsAsync([FromBody] DeleteMailInput input)
     {
         var playerId = GetCurrentUserId();
         if (string.IsNullOrEmpty(playerId))

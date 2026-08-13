@@ -15,10 +15,11 @@ const rarityNames: Record<string, string> = {
 
 interface EngineRef {
   current: {
-    buyShopItem: (itemId: string) => boolean;
-    refreshShop: () => boolean;
+    buyShopItem: (itemId: string) => Promise<boolean>;
+    refreshShop: () => Promise<boolean>;
     getShopItems: () => ShopItem[];
     closeShop: () => void;
+    refreshShopFromServer?: () => Promise<void>;
   } | null;
 }
 
@@ -35,26 +36,39 @@ function ShopPanelImpl({ engineRef, isOpen, onClose }: ShopPanelProps) {
 
   useEffect(() => {
     if (isOpen && engineRef.current) {
-      setShopItems([...engineRef.current.getShopItems()]);
+      // 先从服务端拉取最新商店数据，再刷新本地展示
+      void engineRef.current?.refreshShopFromServer?.().then(() => {
+        if (engineRef.current) {
+          setShopItems([...engineRef.current.getShopItems()]);
+        }
+      });
     }
   }, [isOpen, engineRef]);
 
   if (!isOpen) return null;
 
-  const handleBuy = (itemId: string) => {
+  const handleBuy = async (itemId: string) => {
     if (engineRef.current) {
-      const success = engineRef.current.buyShopItem(itemId);
-      if (success) {
-        setShopItems([...engineRef.current.getShopItems()]);
+      try {
+        const success = await engineRef.current.buyShopItem(itemId);
+        if (success && engineRef.current) {
+          setShopItems([...engineRef.current.getShopItems()]);
+        }
+      } catch (e) {
+        // 购买失败：忽略
       }
     }
   };
 
-  const handleRefresh = () => {
+  const handleRefresh = async () => {
     if (engineRef.current) {
-      const success = engineRef.current.refreshShop();
-      if (success) {
-        setShopItems([...engineRef.current.getShopItems()]);
+      try {
+        const success = await engineRef.current.refreshShop();
+        if (success && engineRef.current) {
+          setShopItems([...engineRef.current.getShopItems()]);
+        }
+      } catch (e) {
+        // 刷新失败：忽略
       }
     }
   };

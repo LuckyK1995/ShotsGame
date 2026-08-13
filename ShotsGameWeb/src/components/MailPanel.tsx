@@ -1,4 +1,4 @@
-import { useState, useMemo, memo } from 'react';
+import { useState, useMemo, useEffect, memo } from 'react';
 import { useGameStore } from '../store/gameStore';
 import { EquipmentIcon } from './EquipmentIcon';
 import { EquipmentDetailModal, itemSlotStyle } from './EquipmentDetailModal';
@@ -11,12 +11,13 @@ import { ModalHudBackground } from './ModalHudBackground';
 
 interface GameEngineRef {
   current: {
-    claimMailAttachments: (mailId: string) => { success: boolean; reason?: string } | null;
-    removeMail: (mailId: string) => void;
-    markMailRead: (mailId: string) => void;
-    markAllMailsRead: (mailType: 'system' | 'battle') => void;
-    removeAllReadMails: (mailType: 'system' | 'battle') => { removed: number; skipped: number };
-    claimAllMailAttachments: (mailType: 'system' | 'battle') => { success: boolean; equipShortage?: number; itemShortage?: number };
+    claimMailAttachments: (mailId: string) => Promise<{ success: boolean; reason?: string }>;
+    removeMail: (mailId: string) => Promise<void>;
+    markMailRead: (mailId: string) => Promise<void>;
+    markAllMailsRead: (mailType: 'system' | 'battle') => Promise<void>;
+    removeAllReadMails: (mailType: 'system' | 'battle') => Promise<{ removed: number; skipped: number }>;
+    claimAllMailAttachments: (mailType: 'system' | 'battle') => Promise<{ success: boolean; equipShortage?: number; itemShortage?: number }>;
+    refreshMailsFromServer?: () => Promise<void>;
   } | null;
 }
 
@@ -41,6 +42,12 @@ function MailPanelImpl({ engineRef, onClose }: MailPanelProps) {
   const [toast, setToast] = useState<{ success: boolean; message: string } | null>(null);
   const [detailItem, setDetailItem] = useState<{ type: 'equipment' | 'item'; equipment?: Equipment; itemStack?: ItemStack } | null>(null);
   const [confirmDeleteAll, setConfirmDeleteAll] = useState(false);
+  const [busy, setBusy] = useState(false);
+
+  // 面板打开时从服务端刷新邮件列表
+  useEffect(() => {
+    void engineRef.current?.refreshMailsFromServer?.();
+  }, [engineRef]);
 
   const filteredMails = useMemo(() => mails.filter(m => m.type === mailTab), [mails, mailTab]);
 
@@ -59,26 +66,29 @@ function MailPanelImpl({ engineRef, onClose }: MailPanelProps) {
   const handleSelectMail = (mail: Mail) => {
     setSelectedId(mail.id);
     if (!mail.read) {
-      engineRef.current?.markMailRead(mail.id);
+      void engineRef.current?.markMailRead(mail.id);
     }
   };
 
-  const handleClaim = () => {
-    if (!selectedMail) return;
-    const ret = engineRef.current?.claimMailAttachments(selectedMail.id);
-    if (!ret) {
-      showToast(false, '引擎未就绪');
-      return;
-    }
-    if (ret.success) {
-      showToast(true, ret.reason ? `✦ ${ret.reason} ✦` : '✦ 附件已领取 ✦');
-    } else {
-      showToast(false, ret.reason || '领取失败');
+  const handleClaim = async () => {
+    if (!selectedMail || !engineRef.current || busy) return;
+    setBusy(true);
+    try {
+      const ret = await engineRef.current.claimMailAttachments(selectedMail.id);
+      if (ret.success) {
+        showToast(true, ret.reason ? `✦ ${ret.reason} ✦` : '✦ 附件已领取 ✦');
+      } else {
+        showToast(false, ret.reason || '领取失败');
+      }
+    } catch {
+      showToast(false, '领取失败，请重试');
+    } finally {
+      setBusy(false);
     }
   };
 
-  const handleDelete = () => {
-    if (!selectedMail) return;
+  const handleDelete = async () => {
+    if (!selectedMail || !engineRef.current || busy) return;
     if (!selectedMail.claimed && selectedMail.attachments) {
       const has = (selectedMail.attachments.equipment?.length || 0) > 0 ||
         (selectedMail.attachments.items?.length || 0) > 0 ||
@@ -88,43 +98,66 @@ function MailPanelImpl({ engineRef, onClose }: MailPanelProps) {
         return;
       }
     }
-    engineRef.current?.removeMail(selectedMail.id);
-    setSelectedId(null);
-    showToast(true, '已删除');
+    setBusy(true);
+    try {
+      await engineRef.current.removeMail(selectedMail.id);
+      setSelectedId(null);
+      showToast(true, '已删除');
+    } catch {
+      showToast(false, '删除失败，请重试');
+    } finally {
+      setBusy(false);
+    }
   };
 
-  const handleMarkAllRead = () => {
-    engineRef.current?.markAllMailsRead(mailTab);
-    showToast(true, '已全部标记为已读');
+  const handleMarkAllRead = async () => {
+    if (!engineRef.current || busy) return;
+    setBusy(true);
+    try {
+      await engineRef.current.markAllMailsRead(mailTab);
+      showToast(true, '已全部标记为已读');
+    } catch {
+      showToast(false, '操作失败，请重试');
+    } finally {
+      setBusy(false);
+    }
   };
 
-  const handleRemoveAllRead = () => {
-    const ret = engineRef.current?.removeAllReadMails(mailTab);
-    if (!ret) {
-      showToast(false, '引擎未就绪');
-      return;
+  const handleRemoveAllRead = async () => {
+    if (!engineRef.current || busy) return;
+    setBusy(true);
+    try {
+      const ret = await engineRef.current.removeAllReadMails(mailTab);
+      if (ret.skipped > 0) {
+        showToast(false, `${ret.removed > 0 ? `已删除${ret.removed}封，` : ''}${ret.skipped}封有未领取附件无法删除`);
+      } else {
+        showToast(true, `已删除${ret.removed}封邮件`);
+      }
+      setSelectedId(null);
+    } catch {
+      showToast(false, '删除失败，请重试');
+    } finally {
+      setBusy(false);
     }
-    if (ret.skipped > 0) {
-      showToast(false, `${ret.removed > 0 ? `已删除${ret.removed}封，` : ''}${ret.skipped}封有未领取附件无法删除`);
-    } else {
-      showToast(true, `已删除${ret.removed}封邮件`);
-    }
-    setSelectedId(null);
   };
 
-  const handleClaimAll = () => {
-    const ret = engineRef.current?.claimAllMailAttachments(mailTab);
-    if (!ret) {
-      showToast(false, '引擎未就绪');
-      return;
-    }
-    if (ret.success) {
-      showToast(true, '✦ 全部领取成功 ✦');
-    } else {
-      const parts: string[] = [];
-      if (ret.equipShortage && ret.equipShortage > 0) parts.push(`装备栏格子不足【-${ret.equipShortage}】`);
-      if (ret.itemShortage && ret.itemShortage > 0) parts.push(`物品栏格子不足【-${ret.itemShortage}】`);
-      showToast(false, parts.join('、'));
+  const handleClaimAll = async () => {
+    if (!engineRef.current || busy) return;
+    setBusy(true);
+    try {
+      const ret = await engineRef.current.claimAllMailAttachments(mailTab);
+      if (ret.success) {
+        showToast(true, '✦ 全部领取成功 ✦');
+      } else {
+        const parts: string[] = [];
+        if (ret.equipShortage && ret.equipShortage > 0) parts.push(`装备栏格子不足【-${ret.equipShortage}】`);
+        if (ret.itemShortage && ret.itemShortage > 0) parts.push(`物品栏格子不足【-${ret.itemShortage}】`);
+        showToast(false, parts.join('、'));
+      }
+    } catch {
+      showToast(false, '领取失败，请重试');
+    } finally {
+      setBusy(false);
     }
   };
 

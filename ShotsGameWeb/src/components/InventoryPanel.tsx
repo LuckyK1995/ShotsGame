@@ -15,7 +15,7 @@ interface GameEngineRef {
     useItemBatch: (itemId: string, count: number) => number;
     removeFromInventory: (index: number) => void;
     batchSellItems: (itemIds: string[]) => number;
-    openLotteryPot: () => { type: 'gold' | 'exp' | 'item'; icon: string; name: string; color: string; amount: number; itemId?: string } | null;
+    openLotteryPot: () => Promise<{ type: 'gold' | 'exp' | 'item'; icon: string; name: string; color: string; amount: number; itemId?: string } | null>;
     getLotteryPotCount: () => number;
     getItemCooldowns?: () => { key: string; remaining: number; duration: number; icon: string; name: string; itemId: string }[];
     getStatRerollPreview?: (equipId: string) => {

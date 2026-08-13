@@ -48,7 +48,7 @@ public class InventoryController : AppControllerBase
     /// <param name="input">添加物品参数，包含物品 ID 和添加数量</param>
     /// <returns>添加后物品堆叠详情 ItemStackOutput</returns>
     [HttpPost("add")]
-    public async Task<IActionResult> AddItemAsync(AddItemInput input)
+    public async Task<IActionResult> AddItemAsync([FromBody] AddItemInput input)
     {
         var playerId = GetCurrentUserId();
         if (string.IsNullOrEmpty(playerId))
@@ -81,7 +81,7 @@ public class InventoryController : AppControllerBase
     /// <param name="input">移除物品参数，包含物品 ID 和移除数量</param>
     /// <returns>移除后物品堆叠详情 ItemStackOutput</returns>
     [HttpPost("remove")]
-    public async Task<IActionResult> RemoveItemAsync(RemoveItemInput input)
+    public async Task<IActionResult> RemoveItemAsync([FromBody] RemoveItemInput input)
     {
         var playerId = GetCurrentUserId();
         if (string.IsNullOrEmpty(playerId))
@@ -114,7 +114,7 @@ public class InventoryController : AppControllerBase
     /// <param name="input">出售物品参数，包含待出售物品 ID 列表及对应数量</param>
     /// <returns>出售结果 SellItemsOutput（含获得金币总收益）</returns>
     [HttpPost("sell")]
-    public async Task<IActionResult> SellItemsAsync(SellItemsInput input)
+    public async Task<IActionResult> SellItemsAsync([FromBody] SellItemsInput input)
     {
         var playerId = GetCurrentUserId();
         if (string.IsNullOrEmpty(playerId))

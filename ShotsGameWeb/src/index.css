@@ -430,5 +430,14 @@ body {
   50% { text-shadow: 0 0 8px currentColor, 0 0 12px currentColor; }
 }
 
+/* 底部按钮区横向滚动容器：隐藏滚动条，保持窄屏可滑动查看 */
+.bottom-btn-scroll {
+  scrollbar-width: none; /* Firefox */
+  -ms-overflow-style: none; /* IE/Edge */
+}
+.bottom-btn-scroll::-webkit-scrollbar {
+  display: none; /* Chrome/Safari/移动端 */
+}
+
 
 

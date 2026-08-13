@@ -26,7 +26,7 @@ public class BattleController : AppControllerBase
     /// <param name="input">战斗结算参数，包含波次、击杀数、持续时间、得分等</param>
     /// <returns>战斗结算结果 BattleResultOutput（含获得经验、金币、物品奖励等）</returns>
     [HttpPost("submit")]
-    public async Task<IActionResult> Submit(SubmitBattleInput input)
+    public async Task<IActionResult> Submit([FromBody] SubmitBattleInput input)
     {
         var playerId = GetCurrentUserId();
         if (string.IsNullOrEmpty(playerId))

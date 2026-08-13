@@ -49,7 +49,7 @@ public class AchievementController : AppControllerBase
     /// <param name="input">领取成就参数，包含目标成就 ID</param>
     /// <returns>领取结果 ClaimAchievementOutput（含获得的奖励物品）</returns>
     [HttpPost("claim")]
-    public async Task<IActionResult> ClaimAchievementAsync(ClaimAchievementInput input)
+    public async Task<IActionResult> ClaimAchievementAsync([FromBody] ClaimAchievementInput input)
     {
         var playerId = GetCurrentUserId();
         if (string.IsNullOrEmpty(playerId))

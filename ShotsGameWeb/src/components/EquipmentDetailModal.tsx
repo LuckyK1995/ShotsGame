@@ -1,3 +1,4 @@
+import { createPortal } from 'react-dom';
 import type { Equipment, EquipmentAffix, EquipRarity } from '../game/types/game';
 import { RARITY_COLORS, getRarityName, SLOT_LABELS } from '../game/data/equipment';
 import { getEnhanceAttackBonus } from '../game/data/enhanceItems';
@@ -101,7 +102,7 @@ export function EquipmentDetailModal({ equipment, onClose }: EquipmentDetailModa
     a.type === 'critRate' || a.type === 'critDamage' || a.type === 'attackSpeed' ||
     a.type === 'statusFreeze' || a.type === 'statusPoison' || a.type === 'statusBurn';
 
-  return (
+  return createPortal(
     <div
       data-role="detail-mask"
       className="fixed inset-0 flex items-center justify-center z-[300]"
@@ -115,6 +116,7 @@ export function EquipmentDetailModal({ equipment, onClose }: EquipmentDetailModa
         className="relative flex flex-col"
         style={{
           width: '280px',
+          height: '440px',
           padding: '12px 14px',
           background: 'rgba(19, 16, 37, 0.95)',
           border: `1px solid ${hexToRgba(rarityColor, 0.5)}`,
@@ -127,7 +129,7 @@ export function EquipmentDetailModal({ equipment, onClose }: EquipmentDetailModa
       >
         {/* HUD 背景：与按钮区不同纹路/颜色（按稀有度着色） */}
         <ModalHudBackground accentColor={rarityColor} accentColor2={neonCyan} />
-        <div className="relative" style={{ zIndex: 1 }}>
+        <div className="relative flex flex-col min-h-0" style={{ zIndex: 1, flex: 1 }}>
           {/* 头部：图标 + 装备名 + 关闭按钮 */}
           <div className="flex justify-between items-start mb-2">
             <div className="flex items-center gap-2.5">
@@ -180,7 +182,7 @@ export function EquipmentDetailModal({ equipment, onClose }: EquipmentDetailModa
 
           {/* 主属性 + 词条 */}
           <div
-            className="overflow-y-auto pt-2"
+            className="overflow-y-auto pt-2 flex-1 min-h-0"
             style={{ borderTop: '1px solid rgba(176, 38, 255, 0.15)' }}
           >
             <div className="grid grid-cols-3 gap-x-2 gap-y-0.5">
@@ -252,6 +254,7 @@ export function EquipmentDetailModal({ equipment, onClose }: EquipmentDetailModa
           </div>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }

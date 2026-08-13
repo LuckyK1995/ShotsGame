@@ -71,7 +71,7 @@ public class LotteryController : AppControllerBase
     /// <param name="input">押注参数，包含赔率类别和押注硬币数量</param>
     /// <returns>更新后的水果机状态 LotteryOutput</returns>
     [HttpPost("place-bet")]
-    public async Task<IActionResult> PlaceBetAsync(PlaceBetInput input)
+    public async Task<IActionResult> PlaceBetAsync([FromBody] PlaceBetInput input)
     {
         var playerId = GetCurrentUserId();
         if (string.IsNullOrEmpty(playerId))
@@ -99,7 +99,7 @@ public class LotteryController : AppControllerBase
     /// <param name="input">批量押注参数，包含多笔赔率类别与对应押注数量</param>
     /// <returns>更新后的水果机状态 LotteryOutput</returns>
     [HttpPost("place-bets-batch")]
-    public async Task<IActionResult> PlaceBetsBatchAsync(PlaceBetsBatchInput input)
+    public async Task<IActionResult> PlaceBetsBatchAsync([FromBody] PlaceBetsBatchInput input)
     {
         var playerId = GetCurrentUserId();
         if (string.IsNullOrEmpty(playerId))
@@ -127,7 +127,7 @@ public class LotteryController : AppControllerBase
     /// <param name="input">取消押注参数，包含目标赔率类别</param>
     /// <returns>更新后的水果机状态 LotteryOutput</returns>
     [HttpPost("cancel-bet")]
-    public async Task<IActionResult> CancelBetAsync(CancelBetInput input)
+    public async Task<IActionResult> CancelBetAsync([FromBody] CancelBetInput input)
     {
         var playerId = GetCurrentUserId();
         if (string.IsNullOrEmpty(playerId))

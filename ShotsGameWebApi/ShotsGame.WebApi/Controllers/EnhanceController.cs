@@ -27,7 +27,7 @@ public class EnhanceController : AppControllerBase
     /// <param name="input">宝石合成参数，包含宝石类型、原稀有度、合成数量</param>
     /// <returns>合成结果 MergeGemOutput（含获得的高级宝石及消耗材料）</returns>
     [HttpPost("merge-gems")]
-    public async Task<IActionResult> MergeGemsAsync(MergeGemInput input)
+    public async Task<IActionResult> MergeGemsAsync([FromBody] MergeGemInput input)
     {
         var playerId = GetCurrentUserId();
         if (string.IsNullOrEmpty(playerId))
@@ -57,7 +57,7 @@ public class EnhanceController : AppControllerBase
     /// <param name="input">附魔书合成参数，包含附魔属性类型、原稀有度、合成数量</param>
     /// <returns>合成结果 MergeEnchantOutput（含获得的高级附魔书及消耗材料）</returns>
     [HttpPost("merge-enchants")]
-    public async Task<IActionResult> MergeEnchantsAsync(MergeEnchantInput input)
+    public async Task<IActionResult> MergeEnchantsAsync([FromBody] MergeEnchantInput input)
     {
         var playerId = GetCurrentUserId();
         if (string.IsNullOrEmpty(playerId))

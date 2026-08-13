@@ -37,17 +37,17 @@ public class HorseRacingService : IHorseRacingService
     private const int StatusRacing = 1;
     private const int StatusFinished = 2;
 
-    /// <summary>8匹预设马基础赔率（不浮动基准）</summary>
+    /// <summary>8匹预设马基础赔率（不浮动基准）— 与前端 horseRacing.ts 保持一致</summary>
     private static readonly List<(int Id, string Name, string Color, double BaseOdds)> PresetHorses = new()
     {
-        (1, "赤兔", "#E74C3C", 2.5),
-        (2, "的卢", "#3498DB", 3.0),
-        (3, "绝影", "#2C3E50", 4.0),
-        (4, "爪黄飞电", "#F1C40F", 5.0),
-        (5, "乌云踏雪", "#1A1A1A", 6.5),
-        (6, "照夜玉狮子", "#ECF0F1", 8.0),
-        (7, "飒露紫", "#8E44AD", 12.0),
-        (8, "骅骝", "#E67E22", 18.0)
+        (0, "雷霆闪电", "#FF4757", 2.0),
+        (1, "疾风之影", "#FF8C42", 3.0),
+        (2, "赤焰流星", "#FF00FF", 4.5),
+        (3, "幽冥暗影", "#9B59B6", 6.5),
+        (4, "冰霜骏马", "#00F5D4", 8.5),
+        (5, "黄金征途", "#FFD700", 10.5),
+        (6, "狂野风暴", "#2ECC71", 12.5),
+        (7, "深渊幻影", "#1E90FF", 14.5)
     };
 
     /// <summary>
@@ -359,8 +359,10 @@ public class HorseRacingService : IHorseRacingService
 
     private static double ApplyOddsFluctuation(double baseOdds)
     {
-        var fluctuation = 1.0 + (_rng.NextDouble() * 0.5 - 0.25);
-        return Math.Round(baseOdds * fluctuation, 2);
+        // 与前端一致：±25% 浮动，clamp 到 1.5-15，保留一位小数
+        var factor = 0.75 + _rng.NextDouble() * 0.5; // 0.75 ~ 1.25
+        var floated = baseOdds * factor;
+        return Math.Round(Math.Max(1.5, Math.Min(15, floated)), 1);
     }
 
     private static List<HorseOutput> SimulateEliminationRound(List<HorseOutput> horses, int winnerCount)

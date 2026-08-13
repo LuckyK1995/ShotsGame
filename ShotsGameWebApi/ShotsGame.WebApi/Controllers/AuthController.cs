@@ -93,6 +93,7 @@ public class AuthController : AppControllerBase
     /// </summary>
     /// <returns>返回登出成功确认信息</returns>
     [HttpPost("logout")]
+    [Authorize]
     public IActionResult Logout()
     {
         // JWT 无状态，前端清除 token 即可；此接口供前端调用完成退出流程

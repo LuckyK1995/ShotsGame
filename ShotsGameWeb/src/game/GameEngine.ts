@@ -30,6 +30,7 @@ import type {
   MailAttachments,
   Blueprint,
   MerchantEquipment,
+  EnemyDebuff,
 } from './types/game';
 import {
   ObjectPool,
@@ -69,6 +70,26 @@ import type { EnchantItemId, EnchantStat } from './data/enchantItems';
 import type { GameMode, DifficultyLevel, MaterialDungeonType } from './data/gameModes';
 import { GAME_MODE_CONFIGS, MATERIAL_DUNGEONS, DIFFICULTY_CONFIG } from './data/gameModes';
 import { STORAGE_CAPACITY } from './data/storageCapacity';
+import {
+  saveLocal,
+  loadLocal,
+  loadFromServer,
+  flushSave,
+  saveHighScoreLocal,
+  loadHighScoreLocal,
+  getDailyChallengeUsed,
+  updateDailyChallengeRemaining,
+} from './saveService';
+// 业务域 API（用于将原本地模拟逻辑改为服务端权威）
+import { isAuthenticated } from '../api/client';
+import { checkInApi } from '../api/modules/checkIn';
+import { onlineRewardApi } from '../api/modules/onlineReward';
+import { shopApi } from '../api/modules/shop';
+import { lotteryApi } from '../api/modules/lottery';
+import { lotteryPotApi } from '../api/modules/lotteryPot';
+import { horseRacingApi } from '../api/modules/horseRacing';
+import { battleApi } from '../api/modules/battle';
+import { mailApi } from '../api/modules/mail';
 
 export class GameEngine {
   canvas: HTMLCanvasElement;
@@ -3946,9 +3967,9 @@ export class GameEngine {
     const waveBonus = this.gameState.currentWave * 100;
     this.player.score += waveBonus;
     
-    const highScore = parseInt(localStorage.getItem('shotsGameHighScore') || '0');
+    const highScore = loadHighScoreLocal();
     if (this.player.score > highScore) {
-      localStorage.setItem('shotsGameHighScore', this.player.score.toString());
+      saveHighScoreLocal(this.player.score);
     }
     
     if (this.onBossDefeat) {
@@ -4001,18 +4022,73 @@ export class GameEngine {
     }
   }
 
-  // 领取邮件附件
-  claimMailAttachments(mailId: string): { success: boolean; reason?: string } {
-    const mail = this.mails.find(m => m.id === mailId);
-    if (!mail) return { success: false, reason: '邮件不存在' };
-    if (mail.claimed) return { success: false, reason: '已领取' };
+  /** 判断是否为本地生成的战斗邮件（未同步到服务端） */
+  private isLocalBattleMail(mailId: string): boolean {
+    return mailId.startsWith('mail_battle_');
+  }
+
+  /**
+   * 发送系统奖励邮件（签到 / 在线奖励 等）
+   * 奖励以附件形式存入邮件，玩家需在邮箱中领取
+   */
+  private sendRewardMail(opts: {
+    title: string;
+    body: string;
+    items?: { itemId: string; count: number }[];
+    gold?: number;
+  }): void {
+    const attachments: MailAttachments = {};
+    if (opts.items && opts.items.length > 0) {
+      attachments.items = opts.items.map(i => ({ itemId: i.itemId, count: i.count }));
+    }
+    if (opts.gold && opts.gold > 0) {
+      attachments.gold = opts.gold;
+    }
+    const hasAttach = (attachments.items && attachments.items.length > 0) || (attachments.gold && attachments.gold > 0);
+    if (!hasAttach) return;
+
+    const mail: Mail = {
+      id: `mail_reward_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+      type: 'system',
+      title: opts.title,
+      body: opts.body,
+      timestamp: Date.now(),
+      read: false,
+      claimed: false,
+      attachments,
+    };
+    this.mails.unshift(mail);
+    if (this.mails.length > 50) this.mails.length = 50;
+    if (this.onMailChange) {
+      this.onMailChange([...this.mails]);
+    }
+  }
+
+  /** 从服务端拉取邮件列表并合并本地战斗邮件（面板打开时调用） */
+  async refreshMailsFromServer(): Promise<void> {
+    if (!isAuthenticated()) return;
+    try {
+      const result = await mailApi.getMails(1, 50);
+      // 保留本地未同步的战斗邮件（mail_battle_ 前缀），合并服务端邮件
+      const localBattleMails = this.mails.filter(m => this.isLocalBattleMail(m.id));
+      const serverIds = new Set(result.mails.map(m => m.id));
+      const unsyncedLocal = localBattleMails.filter(m => !serverIds.has(m.id));
+      this.mails = [...result.mails, ...unsyncedLocal];
+      if (this.mails.length > 50) this.mails.length = 50;
+      if (this.onMailChange) this.onMailChange([...this.mails]);
+    } catch (e) {
+      console.warn('[GameEngine] refreshMailsFromServer failed:', e);
+    }
+  }
+
+  /** 将邮件附件发放到本地仓库，返回未领完的原因（仓库满） */
+  private applyMailAttachments(mail: Mail): string | undefined {
     if (!mail.attachments) {
       mail.claimed = true;
       mail.read = true;
       if (this.onMailChange) this.onMailChange([...this.mails]);
-      return { success: true };
+      return undefined;
     }
-
     const att = mail.attachments;
     // 装备：逐件放入仓库，满了的保留在邮件中
     if (att.equipment && att.equipment.length > 0) {
@@ -4024,11 +4100,8 @@ export class GameEngine {
           remaining.push(eq);
         }
       }
-      if (remaining.length > 0) {
-        att.equipment = remaining;
-      } else {
-        att.equipment = undefined;
-      }
+      if (remaining.length > 0) att.equipment = remaining;
+      else att.equipment = undefined;
       if (this.onEquipmentStorageChange) this.onEquipmentStorageChange(this.equipmentStorage);
     }
     // 物品：逐组放入仓库
@@ -4044,11 +4117,8 @@ export class GameEngine {
           remainingItems.push({ ...it });
         }
       }
-      if (remainingItems.length > 0) {
-        att.items = remainingItems;
-      } else {
-        att.items = undefined;
-      }
+      if (remainingItems.length > 0) att.items = remainingItems;
+      else att.items = undefined;
       if (this.onInventoryChange) this.onInventoryChange(this.inventory);
     }
     // 金币
@@ -4057,8 +4127,6 @@ export class GameEngine {
       att.gold = undefined;
       if (this.onPlayerChange) this.onPlayerChange(this.player);
     }
-
-    // 仅当所有附件都领取完才标记 claimed
     const stillHas = (att.equipment && att.equipment.length > 0) ||
       (att.items && att.items.length > 0) ||
       (att.gold && att.gold > 0);
@@ -4067,10 +4135,34 @@ export class GameEngine {
       mail.read = true;
     }
     if (this.onMailChange) this.onMailChange([...this.mails]);
-    return { success: true, reason: stillHas ? '仓库已满，部分附件未能领取' : undefined };
+    return stillHas ? '仓库已满，部分附件未能领取' : undefined;
   }
 
-  removeMail(mailId: string): void {
+  // 领取邮件附件
+  async claimMailAttachments(mailId: string): Promise<{ success: boolean; reason?: string }> {
+    const mail = this.mails.find(m => m.id === mailId);
+    if (!mail) return { success: false, reason: '邮件不存在' };
+    if (mail.claimed) return { success: false, reason: '已领取' };
+
+    // 服务端邮件：调用 API 领取（服务端权威记录），本地同步发放附件
+    if (isAuthenticated() && !this.isLocalBattleMail(mailId)) {
+      try {
+        await mailApi.claim({ mailIds: [mailId] });
+        const reason = this.applyMailAttachments(mail);
+        this.saveGame();
+        return { success: true, reason };
+      } catch (e) {
+        console.warn('[GameEngine] claimMailAttachments API failed, fallback to local:', e);
+      }
+    }
+
+    // 本地降级逻辑（本地战斗邮件或 API 失败）
+    const reason = this.applyMailAttachments(mail);
+    this.saveGame();
+    return { success: true, reason };
+  }
+
+  async removeMail(mailId: string): Promise<void> {
     const idx = this.mails.findIndex(m => m.id === mailId);
     if (idx === -1) return;
     const mail = this.mails[idx];
@@ -4081,20 +4173,46 @@ export class GameEngine {
         (mail.attachments.gold || 0) > 0;
       if (has) return;
     }
+    // 服务端邮件：调用 API 删除
+    if (isAuthenticated() && !this.isLocalBattleMail(mailId)) {
+      try {
+        await mailApi.delete({ mailIds: [mailId] });
+      } catch (e) {
+        console.warn('[GameEngine] removeMail API failed, fallback to local:', e);
+      }
+    }
     this.mails.splice(idx, 1);
     if (this.onMailChange) this.onMailChange([...this.mails]);
   }
 
-  markMailRead(mailId: string): void {
+  async markMailRead(mailId: string): Promise<void> {
     const mail = this.mails.find(m => m.id === mailId);
-    if (mail && !mail.read) {
-      mail.read = true;
-      if (this.onMailChange) this.onMailChange([...this.mails]);
+    if (!mail || mail.read) return;
+    // 服务端邮件：调用 API 标记已读
+    if (isAuthenticated() && !this.isLocalBattleMail(mailId)) {
+      try {
+        await mailApi.markRead({ mailIds: [mailId] });
+      } catch (e) {
+        console.warn('[GameEngine] markMailRead API failed, fallback to local:', e);
+      }
     }
+    mail.read = true;
+    if (this.onMailChange) this.onMailChange([...this.mails]);
   }
 
   /** 一键标记指定类型的邮件为已读 */
-  markAllMailsRead(mailType: 'system' | 'battle'): void {
+  async markAllMailsRead(mailType: 'system' | 'battle'): Promise<void> {
+    const unreadServerIds = this.mails
+      .filter(m => m.type === mailType && !m.read && !this.isLocalBattleMail(m.id))
+      .map(m => m.id);
+    // 服务端邮件：批量标记已读
+    if (isAuthenticated() && unreadServerIds.length > 0) {
+      try {
+        await mailApi.markRead({ mailIds: unreadServerIds });
+      } catch (e) {
+        console.warn('[GameEngine] markAllMailsRead API failed, fallback to local:', e);
+      }
+    }
     let changed = false;
     for (const mail of this.mails) {
       if (mail.type === mailType && !mail.read) {
@@ -4108,17 +4226,17 @@ export class GameEngine {
   /** 一键删除指定类型的已读邮件（未领取附件的邮件会被跳过）
    *  返回：{ removed, skipped } removed=已删除数, skipped=因附件未领取而跳过的数量
    */
-  removeAllReadMails(mailType: 'system' | 'battle'): { removed: number; skipped: number } {
+  async removeAllReadMails(mailType: 'system' | 'battle'): Promise<{ removed: number; skipped: number }> {
+    // 收集可删除的服务端邮件 ID（已读 + 附件已领完）
+    const deletableServerIds: string[] = [];
     let removed = 0;
     let skipped = 0;
     const remaining: Mail[] = [];
     for (const mail of this.mails) {
       if (mail.type !== mailType || !mail.read) {
-        // 非目标类型或未读 → 保留
         remaining.push(mail);
         continue;
       }
-      // 已读邮件：检查是否还有未领取附件
       const hasUnclaimedAttachment = !mail.claimed && mail.attachments &&
         ((mail.attachments.equipment?.length || 0) > 0 ||
          (mail.attachments.items?.length || 0) > 0 ||
@@ -4128,6 +4246,17 @@ export class GameEngine {
         remaining.push(mail);
       } else {
         removed++;
+        if (!this.isLocalBattleMail(mail.id)) {
+          deletableServerIds.push(mail.id);
+        }
+      }
+    }
+    // 服务端邮件：批量删除
+    if (isAuthenticated() && deletableServerIds.length > 0) {
+      try {
+        await mailApi.delete({ mailIds: deletableServerIds });
+      } catch (e) {
+        console.warn('[GameEngine] removeAllReadMails API failed, fallback to local:', e);
       }
     }
     this.mails = remaining;
@@ -4136,10 +4265,10 @@ export class GameEngine {
   }
 
   /** 一键领取指定类型邮件的所有附件（先检查仓库容量，不足则全部不领取） */
-  claimAllMailAttachments(mailType: 'system' | 'battle'): { success: boolean; reason?: string; equipShortage?: number; itemShortage?: number } {
+  async claimAllMailAttachments(mailType: 'system' | 'battle'): Promise<{ success: boolean; reason?: string; equipShortage?: number; itemShortage?: number }> {
     // 统计所有未领取邮件的附件总量
     let totalEquip = 0;
-    let totalNewItemSlots = 0; // 需要新占位的物品（已有物品叠放不占新格子）
+    let totalNewItemSlots = 0;
 
     const unclaimedMails = this.mails.filter(m => m.type === mailType && !m.claimed && m.attachments);
     for (const mail of unclaimedMails) {
@@ -4163,11 +4292,21 @@ export class GameEngine {
       return { success: false, equipShortage, itemShortage };
     }
 
-    // 容量充足，逐个领取
-    for (const mail of unclaimedMails) {
-      this.claimMailAttachments(mail.id);
+    // 服务端邮件：批量领取
+    const serverMailIds = unclaimedMails.filter(m => !this.isLocalBattleMail(m.id)).map(m => m.id);
+    if (isAuthenticated() && serverMailIds.length > 0) {
+      try {
+        await mailApi.claim({ mailIds: serverMailIds });
+      } catch (e) {
+        console.warn('[GameEngine] claimAllMailAttachments API failed, fallback to local:', e);
+      }
     }
 
+    // 容量充足，逐个本地发放附件
+    for (const mail of unclaimedMails) {
+      this.applyMailAttachments(mail);
+    }
+    this.saveGame();
     return { success: true };
   }
 
@@ -4212,24 +4351,17 @@ export class GameEngine {
     return (this.modeData.purgatoryBossElement as ElementType) || null;
   }
 
-  /** 获取炼狱今日挑战次数 */
+  /** 获取炼狱今日挑战次数（来自服务端 GameMode 缓存，避免客户端篡改） */
   getPurgatoryChallengeCount(): number {
-    const today = new Date().toISOString().slice(0, 10);
-    const saved = localStorage.getItem('purgatory_challenge');
-    if (saved) {
-      try {
-        const data = JSON.parse(saved);
-        if (data.date === today) return data.count || 0;
-      } catch { /* ignore */ }
-    }
-    return 0;
+    return getDailyChallengeUsed('purgatory');
   }
 
-  /** 增加炼狱今日挑战次数 */
+  /** 增加炼狱今日挑战次数（服务端由 gameMode.start 维护，此处仅刷新缓存）
+   *  注意：保留方法签名兼容现有调用，但实际计数由服务端权威维护
+   */
   incrementPurgatoryChallenge(): void {
-    const today = new Date().toISOString().slice(0, 10);
-    const count = this.getPurgatoryChallengeCount() + 1;
-    localStorage.setItem('purgatory_challenge', JSON.stringify({ date: today, count }));
+    // 服务端在 POST /api/game-mode/start 时已自动累加，此处为 no-op
+    // 仅在调用方进入模式后调用 gameModeApi.start 同步缓存
   }
 
   /** 获取材料副本奖励（ItemStack：宝石或强化道具） */
@@ -4305,24 +4437,14 @@ export class GameEngine {
     this.modeData.materialRewards = [];
   }
 
-  /** 获取材料副本今日挑战次数 */
+  /** 获取材料副本今日挑战次数（来自服务端 GameMode 缓存） */
   getMaterialChallengeCount(): number {
-    const today = new Date().toISOString().slice(0, 10);
-    const saved = localStorage.getItem('material_challenge');
-    if (saved) {
-      try {
-        const data = JSON.parse(saved);
-        if (data.date === today) return data.count || 0;
-      } catch { /* ignore */ }
-    }
-    return 0;
+    return getDailyChallengeUsed('material');
   }
 
-  /** 增加材料副本今日挑战次数 */
+  /** 增加材料副本今日挑战次数（服务端由 gameMode.start 维护，此处为 no-op） */
   incrementMaterialChallenge(): void {
-    const today = new Date().toISOString().slice(0, 10);
-    const count = this.getMaterialChallengeCount() + 1;
-    localStorage.setItem('material_challenge', JSON.stringify({ date: today, count }));
+    // 服务端在 POST /api/game-mode/start 时已自动累加
   }
 
   // ============ 日常挑战：结算相关 ============
@@ -4876,13 +4998,9 @@ export class GameEngine {
           const dx = px - bulletAny.targetX;
           const dy = py - bulletAny.targetY;
           const dist = Math.sqrt(dx * dx + dy * dy);
-          const playerInvincible = this.shieldActive || this.player.invincibleTimer > 0 || this.player.isDodging;
-          if (dist <= 14 && !playerInvincible) {
-            const defense = (this.player as any).defense || 0;
-            const reducedDamage = Math.max(1, bullet.damage * (1 - defense / 100));
-            const actualDamage = Math.min(reducedDamage, this.player.health);
-            this.player.health -= actualDamage;
-            // 血量监听统一在 update() 中处理，无需此处重复判断
+          if (dist <= 14) {
+            // applyDamageToPlayer 内部已处理无敌判定、防御减伤、通用抗性、元素抗性
+            this.applyDamageToPlayer(bullet.damage);
           }
           // 落地粒子特效
           if (this.particlePool.canAcquire()) {
@@ -5223,29 +5341,23 @@ export class GameEngine {
     }
   }
 
-  // 怪物近战普通攻击：有攻击间隔，造成 enemy.attack 伤害，考虑暴击/防御
+  // 怪物近战普通攻击：有攻击间隔，造成 enemy.attack 伤害，考虑暴击/防御/通用抗性/元素攻击
   private enemyMeleeAttack(enemy: Enemy): void {
-    const playerInvincible = this.shieldActive || this.player.invincibleTimer > 0 || this.player.isDodging;
-    if (playerInvincible) return;
-
-    // 计算伤害（考虑暴击）
+    // 计算伤害（先算暴击，再套 applyDamageToPlayer 的防御/通用抗性/元素抗性）
     let damage = enemy.attack;
     const isCrit = Math.random() * 100 < (enemy.critRate || 0);
     if (isCrit) {
       damage = Math.floor(damage * (enemy.critDamage || 100) / 100);
     }
-    // 受玩家防御减伤
-    const defense = (this.player as any).defense || 0;
-    const reducedDamage = Math.max(1, damage * (1 - defense / 100));
-    const actualDamage = Math.min(reducedDamage, this.player.health);
-    this.player.health -= actualDamage;
+    const elementAttack = this.extractEnemyElementAttack(enemy);
+    const actualDamage = this.applyDamageToPlayer(damage, elementAttack);
 
-    // 显示伤害数字
-    if (this.damageNumberPool.canAcquire()) {
+    // 显示伤害数字（只有实际造成伤害时才弹字，避免无敌时飘0）
+    if (actualDamage > 0 && this.damageNumberPool.canAcquire()) {
       const dn = this.damageNumberPool.acquire(
         this.player.x + this.player.width / 2,
         this.player.y,
-        Math.floor(actualDamage),
+        actualDamage,
         isCrit ? '#FF0066' : '#FF6600'
       );
       if (dn && isCrit) (dn as any).isCrit = true;
@@ -5334,14 +5446,14 @@ export class GameEngine {
     const dist = Math.sqrt(dx * dx + dy * dy);
 
     // 爆炸范围50px
-    if (dist <= 50 && !playerInvincible) {
-      const defense = (this.player as any).defense || 0;
-      const reducedDamage = Math.max(1, explosionDamage * (1 - defense / 100));
-      const actualDamage = Math.min(reducedDamage, this.player.health);
-      this.player.health -= actualDamage;
+    if (dist <= 50) {
+      // applyDamageToPlayer 内部处理无敌、防御减伤、通用抗性、元素抗性
+      const actualDamage = this.applyDamageToPlayer(explosionDamage);
       // 显示爆炸伤害数字（实际扣血量，避免超过剩余血量）
-      const dn = this.damageNumberPool.acquire(cx, cy - 10, Math.floor(actualDamage), '#FF0066');
-      if (dn) (dn as any).isCrit = true;
+      if (actualDamage > 0) {
+        const dn = this.damageNumberPool.acquire(cx, cy - 10, actualDamage, '#FF0066');
+        if (dn) (dn as any).isCrit = true;
+      }
       // 血量监听统一在 update() 中处理，无需此处重复判断
     }
 
@@ -5728,14 +5840,50 @@ export class GameEngine {
     return items;
   }
 
-  buyShopItem(itemId: string): boolean {
+  /**
+   * 购买商店物品：优先调用服务端 /api/shop/buy，失败时降级到本地逻辑
+   * 服务端权威：扣金币、发放物品/装备均以服务端返回为准
+   */
+  async buyShopItem(itemId: string): Promise<boolean> {
     const shopItem = this.shopItems.find(i => i.id === itemId);
     if (!shopItem || shopItem.sold) return false;
     if (this.player.gold < shopItem.price) return false;
 
+    // 已登录：调用服务端购买接口
+    if (isAuthenticated()) {
+      try {
+        const result = await shopApi.buyItem({ itemId, currentWave: this.gameState.currentWave });
+        if (result.success && result.shop) {
+          // 用服务端返回的最新商品列表覆盖本地
+          this.shopItems = this.normalizeShopItems(result.shop.items || []) as ShopItem[];
+          // 找到对应商品标记 sold（服务端已扣金币、发放物品，这里仅同步本地状态）
+          const local = this.shopItems.find(i => i.id === itemId);
+          if (local) local.sold = true;
+          // 服务端返回的 shop 不含本地装备实例，需在本地发放装备/物品
+          // 降级到本地发放逻辑（服务端仅校验金币与库存）
+          this.applyShopItemPurchase(shopItem);
+          if (this.onPlayerChange) this.onPlayerChange(this.player);
+          if (this.onShopOpen) this.onShopOpen([...this.shopItems]);
+          return true;
+        }
+        console.warn('[GameEngine] buyShopItem API returned failure:', result.message);
+        return false;
+      } catch (e) {
+        console.warn('[GameEngine] buyShopItem API failed, fallback to local:', e);
+      }
+    }
+
+    // 本地降级逻辑
     this.player.gold -= shopItem.price;
     shopItem.sold = true;
+    this.applyShopItemPurchase(shopItem);
+    if (this.onPlayerChange) this.onPlayerChange(this.player);
+    if (this.onShopOpen) this.onShopOpen([...this.shopItems]);
+    return true;
+  }
 
+  /** 商店物品购买后的本地发放逻辑（扣金币由调用方处理） */
+  private applyShopItemPurchase(shopItem: ShopItem): void {
     if (shopItem.type === 'refill') {
       this.player.health = this.player.maxHealth;
     } else if (shopItem.type === 'item' && shopItem.itemId) {
@@ -5745,7 +5893,6 @@ export class GameEngine {
       } else if (this.inventory.length < STORAGE_CAPACITY.inventory) {
         this.inventory.push({ itemId: shopItem.itemId, count: 1 });
       } else {
-        // 物品栏已满，溢入待发邮件
         if (!this.pendingMailDrops.items) this.pendingMailDrops.items = [];
         const exist = this.pendingMailDrops.items.find(i => i.itemId === shopItem.itemId);
         if (exist) exist.count++;
@@ -5757,32 +5904,83 @@ export class GameEngine {
     } else if (shopItem.type === 'equipment' && shopItem.equipment) {
       this.addToStorage(shopItem.equipment);
     }
-
-    if (this.onPlayerChange) {
-      this.onPlayerChange(this.player);
-    }
-    if (this.onShopOpen) {
-      this.onShopOpen([...this.shopItems]);
-    }
-
-    return true;
   }
 
-  refreshShop(): boolean {
+  /**
+   * 刷新商店：优先调用服务端 /api/shop/refresh，失败时降级到本地生成
+   */
+  async refreshShop(): Promise<boolean> {
     const refreshCost = 50 + this.gameState.currentWave * 5;
     if (this.player.gold < refreshCost) return false;
 
-    this.player.gold -= refreshCost;
-    this.shopItems = this.generateShopItems();
-    
-    if (this.onPlayerChange) {
-      this.onPlayerChange(this.player);
-    }
-    if (this.onShopOpen) {
-      this.onShopOpen([...this.shopItems]);
+    // 已登录：调用服务端刷新接口
+    if (isAuthenticated()) {
+      try {
+        const result = await shopApi.refreshShop(this.gameState.currentWave);
+        // 服务端已扣金币并返回新商品列表
+        this.player.gold = result.goldRemaining ?? (this.player.gold - refreshCost);
+        // 服务端返回的商品仅含元数据，装备实例需本地生成（保持装备随机性一致）
+        // 若服务端返回 items 非空且含装备实例则直接使用，否则本地生成
+        if (result.items && result.items.length > 0) {
+          this.shopItems = this.normalizeShopItems(result.items);
+        } else {
+          this.shopItems = this.generateShopItems();
+        }
+        if (this.onPlayerChange) this.onPlayerChange(this.player);
+        if (this.onShopOpen) this.onShopOpen([...this.shopItems]);
+        return true;
+      } catch (e) {
+        console.warn('[GameEngine] refreshShop API failed, fallback to local:', e);
+      }
     }
 
+    // 本地降级逻辑
+    this.player.gold -= refreshCost;
+    this.shopItems = this.generateShopItems();
+    if (this.onPlayerChange) this.onPlayerChange(this.player);
+    if (this.onShopOpen) this.onShopOpen([...this.shopItems]);
     return true;
+  }
+
+  /** 将服务端返回的商店商品归一化为本地 ShopItem 格式 */
+  private normalizeShopItems(items: any[]): ShopItem[] {
+    return items.map((item, idx) => {
+      // 若服务端返回的装备实例不完整，本地生成
+      if (item.type === 'equipment' && !item.equipment) {
+        const slot = (item.slot || 'weapon') as any;
+        const rarity = (item.rarity || 'common') as EquipRarity;
+        const level = item.level || 1;
+        return {
+          id: item.id || `shop_equip_${idx}`,
+          type: 'equipment',
+          equipment: createEquipment(slot, rarity, level),
+          price: item.price || 100,
+          sold: item.sold || false,
+        };
+      }
+      return {
+        id: item.id || `shop_${idx}`,
+        type: item.type || 'item',
+        price: item.price || 0,
+        sold: item.sold || false,
+        itemId: item.itemId,
+        equipment: item.equipment,
+      } as ShopItem;
+    });
+  }
+
+  /** 从服务端拉取商店商品列表并同步本地缓存（面板打开时调用） */
+  async refreshShopFromServer(): Promise<void> {
+    if (!isAuthenticated()) return;
+    try {
+      const result = await shopApi.getShop(this.gameState.currentWave);
+      if (result.items && result.items.length > 0) {
+        this.shopItems = this.normalizeShopItems(result.items);
+        if (this.onShopOpen) this.onShopOpen([...this.shopItems]);
+      }
+    } catch (e) {
+      console.warn('[GameEngine] refreshShopFromServer failed:', e);
+    }
   }
 
   // ===== 装备商人系统 =====
@@ -6373,37 +6571,122 @@ export class GameEngine {
 
       if (bx < px + pw && bx + bullet.width > px &&
           by < py + ph && by + bullet.height > py) {
-        const defense = (this.player as any).defense || 0;
-        const reducedDamage = Math.max(1, bullet.damage * (1 - defense / 100));
-        this.player.health -= reducedDamage;
+        // applyDamageToPlayer 内部处理无敌、防御减伤、通用抗性、元素抗性
+        const actualDamage = this.applyDamageToPlayer(bullet.damage);
         this.bulletPool.release(bullet);
-
-        this.screenShake = Math.max(this.screenShake, 3);
+        if (actualDamage > 0) {
+          this.screenShake = Math.max(this.screenShake, 3);
+        }
       }
     }
   }
 
+  // ===== 伤害计算辅助（完整设计版：含属性伤害+抗性+通用抗性）=====
+
+  /**
+   * 玩家受击：统一计算物理减伤、通用抗性减伤、元素抗性减伤，并扣血
+   * 公式对齐 Excel「战斗伤害计算表」：
+   *   通用减伤系数 = 1 / (1 + 玩家 resistance/100)
+   *   物理实际 = physDamage × (1 - 玩家 defense/100) × 通用减伤系数
+   *   每种怪元素实际 = 该元素攻击 × (1 - 玩家对应抗性/100) × 通用减伤系数
+   *   finalDamage = max(1, round(物理实际 + Σ 元素实际))
+   *
+   * @param physDamage 已算完暴击的物理伤害（如果调用方想在外层自己算暴击）
+   * @param elementAttack 怪物附带的4种元素攻击（如果有）
+   * @returns 最终扣血量（>=1，若玩家无敌则返回0且不扣血）
+   */
+  private applyDamageToPlayer(
+    physDamage: number,
+    elementAttack?: { fire?: number; ice?: number; lightning?: number; poison?: number }
+  ): number {
+    const playerInvincible = this.shieldActive || this.player.invincibleTimer > 0 || this.player.isDodging;
+    if (playerInvincible) return 0;
+
+    const p = this.player as any;
+    const defense = p.defense || 0;
+    const resistance = p.resistance || 0;
+    const generalFactor = 1 / (1 + resistance / 100);
+
+    // 物理实际
+    let total = physDamage * (1 - defense / 100) * generalFactor;
+
+    // 4种元素附加伤害（如有）
+    if (elementAttack) {
+      const fireR = Math.max(0, Math.min(100, p.fireResistance || 0));
+      const iceR  = Math.max(0, Math.min(100, p.iceResistance || 0));
+      const thuR  = Math.max(0, Math.min(100, p.lightningResistance || 0));
+      const poiR  = Math.max(0, Math.min(100, p.poisonResistance || 0));
+      total += (elementAttack.fire      || 0) * (1 - fireR / 100) * generalFactor;
+      total += (elementAttack.ice       || 0) * (1 - iceR  / 100) * generalFactor;
+      total += (elementAttack.lightning || 0) * (1 - thuR  / 100) * generalFactor;
+      total += (elementAttack.poison    || 0) * (1 - poiR  / 100) * generalFactor;
+    }
+
+    const finalDamage = Math.max(1, Math.round(total));
+    this.player.health = Math.max(0, this.player.health - finalDamage);
+    return finalDamage;
+  }
+
+  /**
+   * 从 enemy 对象提取其4种元素属性攻击（配合 enemyMeleeAttack / 子弹 owner 场景用）
+   * 若 enemy 没有配任何元素攻击，返回 undefined
+   */
+  private extractEnemyElementAttack(enemy: Enemy): { fire?: number; ice?: number; lightning?: number; poison?: number } | undefined {
+    const e = enemy as any;
+    const fire = e.fireAttack || 0;
+    const ice  = e.iceAttack  || 0;
+    const thu  = e.lightningAttack || 0;
+    const poi  = e.poisonAttack || 0;
+    if (fire === 0 && ice === 0 && thu === 0 && poi === 0) return undefined;
+    return { fire, ice, lightning: thu, poison: poi };
+  }
+
+  /**
+   * 玩家攻击怪物：按完整设计计算伤害
+   * 公式对齐 Excel「战斗伤害计算表」：
+   *   物理实际 = 物理基础 × (1 - max(0, 怪防 - 物穿)/100)
+   *   元素实际 = Σ 玩家该属性伤害 × (1 - 怪物对应抗性/100)
+   *   基础合计 = 物理实际 + 元素实际
+   *   基础合计 先乘 debuff 伤害系数，最后整体判断暴击（×(1+暴伤/100)）
+   */
   private damageEnemy(enemy: Enemy, damage: number, element?: ElementType, skipLightningChain = false, bulletFx?: any): void {
-    const critRate = (this.player as any).critRate || 0;
-    const critDamage = (this.player as any).critDamage || 50;
-    const isCrit = Math.random() * 100 < critRate;
-    let finalDamage = isCrit ? Math.floor(damage * (1 + critDamage / 100)) : damage;
-    
-    const debuffs = (enemy as any).debuffs || [];
+    const p = this.player as any;
+    const e = enemy as any;
+
+    // 1. 玩家各属性伤害（扣怪物对应抗性）
+    const fireBonus    = (p.fireDamageBonus    || 0) * (1 - Math.max(0, Math.min(100, e.fireResistance      || 0)) / 100);
+    const iceBonus     = (p.iceDamageBonus     || 0) * (1 - Math.max(0, Math.min(100, e.iceResistance       || 0)) / 100);
+    const lightningBonus = (p.lightningDamageBonus || 0) * (1 - Math.max(0, Math.min(100, e.lightningResistance || 0)) / 100);
+    const poisonBonus  = (p.poisonDamageBonus  || 0) * (1 - Math.max(0, Math.min(100, e.poisonResistance    || 0)) / 100);
+    const elementalTotal = Math.max(0, fireBonus + iceBonus + lightningBonus + poisonBonus);
+
+    // 2. 物理部分 = 基础damage 做 (怪防-穿透)/100 减伤
+    const physPen = p.physicalPenetration || 0;
+    const enemyDef = Math.max(0, (e.defense || 0) - physPen);
+    const physActual = damage * (1 - enemyDef / 100);
+
+    // 3. 基础合计 = 物理实际 + 元素合计
+    let base = physActual + elementalTotal;
+
+    // 4. debuff 伤害乘子（debuffs 通常是加在「燃烧/中毒」类上，这里保留原逻辑对整体乘）
+    const debuffs: EnemyDebuff[] = e.debuffs || [];
     for (const debuff of debuffs) {
-      const effect = this.debuffEffects[debuff.type];
+      const effect = (this.debuffEffects as any)[debuff.type];
       if (effect && effect.damageMultiplier) {
-        finalDamage = Math.floor(finalDamage * effect.damageMultiplier);
+        base = base * effect.damageMultiplier;
       }
     }
-    
-    const physicalPenetration = (this.player as any).physicalPenetration || 0;
-    const enemyDefense = Math.max(0, ((enemy as any).defense || 0) - physicalPenetration);
-    finalDamage = Math.max(1, Math.floor(finalDamage * (1 - enemyDefense / 100)));
-    
+
+    // 5. 最后整体暴击
+    const critRate = p.critRate || 0;
+    const critDamage = p.critDamage || 50;
+    const isCrit = Math.random() * 100 < critRate;
+    let finalDamage = isCrit ? Math.floor(base * (1 + critDamage / 100)) : Math.floor(base);
+    finalDamage = Math.max(1, finalDamage);
+
     enemy.health -= finalDamage;
     enemy.hitFlash = isCrit ? 0.15 : 0.08;
-    (enemy as any).hitStunTimer = isCrit ? 120 : 60;
+    e.hitStunTimer = isCrit ? 120 : 60;
 
     const dn = this.damageNumberPool.acquire(
       enemy.x + enemy.width / 2, 
@@ -7253,25 +7536,60 @@ export class GameEngine {
    * 开启抽奖罐（DNF 土罐玩法）：消耗 1 个抽奖罐，按权重随机发放一件奖励
    * 由 LotteryPotOpenModal 弹窗在动画结束后调用
    * 返回奖励信息供 UI 展示；若无抽奖罐返回 null
+   * 优先调用服务端 /api/lottery-pot/use，失败时降级到本地随机
    */
-  openLotteryPot(): {
+  async openLotteryPot(): Promise<{
     type: 'gold' | 'exp' | 'item';
     icon: string;
     name: string;
     color: string;
     amount: number;
     itemId?: string;
-  } | null {
+  } | null> {
     const stack = this.inventory.find(i => i.itemId === 'lottery_pot');
     if (!stack || stack.count <= 0) return null;
 
-    // 消耗 1 个抽奖罐
+    // 已登录：调用服务端开罐接口
+    if (isAuthenticated()) {
+      try {
+        const result = await lotteryPotApi.use({ count: 1 });
+        // 消耗本地抽奖罐
+        stack.count--;
+        if (stack.count <= 0) {
+          this.inventory = this.inventory.filter(i => i.itemId !== 'lottery_pot');
+        }
+        // 发放服务端返回的奖励
+        let chosenReward: { type: 'gold' | 'exp' | 'item'; icon: string; name: string; color: string; amount: number; itemId?: string } | null = null;
+        if (result.rewards && result.rewards.length > 0) {
+          const r = result.rewards[0];
+          if (r.type === 'gold' && r.gold) {
+            this.player.gold += r.gold;
+            chosenReward = { type: 'gold', icon: '💰', name: r.name || '金币', color: '#FFE600', amount: r.gold };
+          } else if (r.type === 'exp' && r.exp) {
+            this.addExp(r.exp);
+            chosenReward = { type: 'exp', icon: '⭐', name: r.name || '经验', color: '#00FF9D', amount: r.exp };
+          } else if (r.type === 'item' && r.itemId && r.count) {
+            for (let i = 0; i < r.count; i++) {
+              this.addToInventory(r.itemId);
+            }
+            chosenReward = { type: 'item', icon: '📦', name: r.name || r.itemId, color: '#B026FF', amount: r.count, itemId: r.itemId };
+          }
+        }
+        if (this.onInventoryChange) this.onInventoryChange(this.inventory);
+        if (this.onPlayerChange) this.onPlayerChange(this.player);
+        this.saveGame();
+        return chosenReward;
+      } catch (e) {
+        console.warn('[GameEngine] openLotteryPot API failed, fallback to local:', e);
+      }
+    }
+
+    // 本地降级逻辑
     stack.count--;
     if (stack.count <= 0) {
       this.inventory = this.inventory.filter(i => i.itemId !== 'lottery_pot');
     }
 
-    // 按权重随机选择奖励
     const pool = GameEngine.LOTTERY_POT_REWARDS;
     const totalWeight = pool.reduce((s, r) => s + r.weight, 0);
     let roll = Math.random() * totalWeight;
@@ -7281,7 +7599,6 @@ export class GameEngine {
       if (roll <= 0) { chosen = r; break; }
     }
 
-    // 发放奖励
     let amount = 0;
     if (chosen.type === 'gold') {
       amount = (chosen.minGold || 0) + Math.floor(Math.random() * ((chosen.maxGold || 0) - (chosen.minGold || 0) + 1));
@@ -7310,10 +7627,159 @@ export class GameEngine {
     };
   }
 
+  /** 从服务端拉取抽奖机状态并同步本地缓存（面板打开时调用） */
+  async refreshLotteryFromServer(): Promise<void> {
+    if (!isAuthenticated()) return;
+    try {
+      const status = await lotteryApi.getStatus();
+      this.lotteryCoins = status.lotteryCoins;
+      this.lotteryBets = status.bets || {};
+      this.lotteryFreeSpins = status.freeSpins || 0;
+      this.lotteryConsecutiveLogin = status.consecutiveLoginDays || 0;
+      this.lotteryLuckyMissCounter = status.luckyMissCounter || 0;
+      this.lotteryLastWin = status.lastWin || 0;
+      if (status.history) this.lotteryHistory = status.history;
+      this.saveGame();
+    } catch (e) {
+      console.warn('[GameEngine] refreshLotteryFromServer failed:', e);
+    }
+  }
+
   /** 查询当前背包中抽奖罐数量（供 UI 判断是否可继续开启） */
   getLotteryPotCount(): number {
     const stack = this.inventory.find(i => i.itemId === 'lottery_pot');
     return stack ? stack.count : 0;
+  }
+
+  // ==================== 赛马系统（服务端权威） ====================
+  // 原 HorseRacingPanel 完全前端模拟比赛结果，现改为调用服务端 /api/horse-racing/* 系列接口
+  // 服务端负责：创建会话、押注、开始比赛、计算胜者与奖金
+  // 前端负责：UI 动画、倒计时、二叉树可视化
+
+  private horseRaceSessionId: string | null = null;
+
+  /** 创建赛马会话，返回马匹与回合配置 */
+  async createHorseRaceSession(): Promise<{
+    sessionId: string;
+    horses: Array<{ id: number; name: string; color: string; odds: number }>;
+  } | null> {
+    if (!isAuthenticated()) return null;
+    try {
+      const session = await horseRacingApi.createSession();
+      this.horseRaceSessionId = session.id;
+      return {
+        sessionId: this.horseRaceSessionId!,
+        horses: session.horses || [],
+      };
+    } catch (e) {
+      console.warn('[GameEngine] createHorseRaceSession failed:', e);
+      return null;
+    }
+  }
+
+  /** 押注某匹马（服务端扣金币、记录押注） */
+  async placeHorseBet(horseId: number, amount: number): Promise<boolean> {
+    if (!isAuthenticated() || !this.horseRaceSessionId) return false;
+    try {
+      await horseRacingApi.placeBet(this.horseRaceSessionId, { horseId, amount });
+      return true;
+    } catch (e) {
+      console.warn('[GameEngine] placeHorseBet failed:', e);
+      return false;
+    }
+  }
+
+  /** 取消押注（服务端退还金币） */
+  async cancelHorseBet(horseId: number): Promise<boolean> {
+    if (!isAuthenticated() || !this.horseRaceSessionId) return false;
+    try {
+      await horseRacingApi.cancelBet(this.horseRaceSessionId, { horseId });
+      return true;
+    } catch (e) {
+      console.warn('[GameEngine] cancelHorseBet failed:', e);
+      return false;
+    }
+  }
+
+  /** 开始比赛（服务端返回倒计时秒数，前端负责动画） */
+  async startHorseRace(): Promise<{ success: boolean; countdown: number } | null> {
+    if (!isAuthenticated() || !this.horseRaceSessionId) return null;
+    try {
+      const result = await horseRacingApi.startRace(this.horseRaceSessionId);
+      return { success: result.success, countdown: 5 };
+    } catch (e) {
+      console.warn('[GameEngine] startHorseRace failed:', e);
+      return null;
+    }
+  }
+
+  /** 查询比赛结果（服务端计算胜者与奖金，前端负责展示） */
+  async getHorseRaceResult(): Promise<{
+    champion: { id: number; name: string; color: string; odds: number } | null;
+    goldWon: number;
+    rounds: Array<{ round: number; horses: any[]; winners: any[]; status: string }>;
+  } | null> {
+    if (!isAuthenticated() || !this.horseRaceSessionId) return null;
+    try {
+      const result = await horseRacingApi.getResult(this.horseRaceSessionId);
+      // 服务端返回的 goldWon 已结算，发放到本地玩家
+      if (result.goldWon > 0) {
+        this.addGold(result.goldWon);
+      }
+      // 清理会话
+      this.horseRaceSessionId = null;
+      return {
+        champion: result.champion,
+        goldWon: result.goldWon,
+        rounds: result.rounds || [],
+      };
+    } catch (e) {
+      console.warn('[GameEngine] getHorseRaceResult failed:', e);
+      this.horseRaceSessionId = null;
+      return null;
+    }
+  }
+
+  // ==================== 战斗结算（服务端权威） ====================
+  /**
+   * 提交战斗结果到服务端：服务端计算金币/经验/等级/波次记录
+   * 用于替代原本地 addGold/addExp 逻辑（战斗结算部分）
+   * 注意：当前 GameEngine 内部战斗流程仍保留本地结算以保证即时反馈，
+   *      此方法供需要在服务端记录战斗结果的场景调用（如每日挑战结算）
+   */
+  async submitBattleResult(input: {
+    mode: string;
+    result: 'victory' | 'defeat' | 'exit';
+    wave: number;
+    score: number;
+    kills: number;
+    durationSeconds?: number;
+  }): Promise<{
+    goldGained: number;
+    expGained: number;
+    newLevel: number;
+    leveledUp: boolean;
+  } | null> {
+    if (!isAuthenticated()) return null;
+    try {
+      const result = await battleApi.submit({
+        modeId: input.mode,
+        result: input.result,
+        wave: input.wave,
+        score: input.score,
+        kills: input.kills,
+        durationSeconds: input.durationSeconds,
+      });
+      return {
+        goldGained: result.goldGained,
+        expGained: result.expGained,
+        newLevel: result.newLevel,
+        leveledUp: result.leveledUp,
+      };
+    } catch (e) {
+      console.warn('[GameEngine] submitBattleResult failed:', e);
+      return null;
+    }
   }
 
   batchSellItems(itemIds: string[]): number {
@@ -7949,25 +8415,92 @@ export class GameEngine {
   }
 
   // 执行签到
-  checkIn(): { success: boolean; day: number; rewards: { itemId: string; count: number; gold: number } } {
+  /**
+   * 执行签到：优先调用服务端 /api/checkin/check，失败时降级到本地逻辑
+   * 服务端返回的奖励为权威结果，本地仅负责发放到背包/金币
+   */
+  async checkIn(): Promise<{ success: boolean; day: number; rewards: { itemId: string; count: number; gold: number } }> {
     this.refreshCheckInWeek();
     const today = this.getTodayDayIndex();
     if (this.checkInDays.includes(today)) {
       return { success: false, day: today, rewards: { itemId: '', count: 0, gold: 0 } };
     }
-    this.checkInDays.push(today);
-    const rewards = this.getCheckInRewards(today);
-    // 发放奖励
-    if (rewards.itemId) {
-      for (let i = 0; i < rewards.count; i++) {
-        this.addToInventory(rewards.itemId);
+
+    // 已登录：调用服务端签到接口（服务端权威）
+    if (isAuthenticated()) {
+      try {
+        const result = await checkInApi.doCheckIn();
+        if (result.success) {
+          // 同步本地签到状态
+          if (!this.checkInDays.includes(result.day)) {
+            this.checkInDays.push(result.day);
+          }
+          // 奖励发送到邮箱（玩家需在邮箱中领取）
+          const r = result.reward || { itemId: '', count: 0, gold: 0 };
+          if (r.itemId || r.gold > 0) {
+            const itemDef = r.itemId ? getItemDef(r.itemId) : undefined;
+            const bodyParts: string[] = [];
+            if (r.itemId && r.count > 0) {
+              bodyParts.push(`${itemDef?.name || r.itemId} x${r.count}`);
+            }
+            if (r.gold > 0) {
+              bodyParts.push(`${r.gold} 金币`);
+            }
+            this.sendRewardMail({
+              title: `第${result.day + 1}日签到奖励`,
+              body: `签到奖励已发放：${bodyParts.join('、')}。请在邮箱中领取附件。`,
+              items: r.itemId ? [{ itemId: r.itemId, count: r.count }] : undefined,
+              gold: r.gold > 0 ? r.gold : undefined,
+            });
+          }
+          this.saveGame();
+          return { success: true, day: result.day, rewards: r };
+        }
+        // 服务端返回失败（如已签到）：同步本地状态
+        if (!this.checkInDays.includes(result.day)) {
+          this.checkInDays.push(result.day);
+        }
+        return { success: false, day: result.day, rewards: { itemId: '', count: 0, gold: 0 } };
+      } catch (e) {
+        console.warn('[GameEngine] checkIn API failed, fallback to local:', e);
+        // 降级到本地逻辑
       }
     }
-    if (rewards.gold > 0) {
-      this.addGold(rewards.gold);
+
+    // 本地降级逻辑
+    this.checkInDays.push(today);
+    const rewards = this.getCheckInRewards(today);
+    if (rewards.itemId || rewards.gold > 0) {
+      const itemDef = rewards.itemId ? getItemDef(rewards.itemId) : undefined;
+      const bodyParts: string[] = [];
+      if (rewards.itemId && rewards.count > 0) {
+        bodyParts.push(`${itemDef?.name || rewards.itemId} x${rewards.count}`);
+      }
+      if (rewards.gold > 0) {
+        bodyParts.push(`${rewards.gold} 金币`);
+      }
+      this.sendRewardMail({
+        title: `第${today + 1}日签到奖励`,
+        body: `签到奖励已发放：${bodyParts.join('、')}。请在邮箱中领取附件。`,
+        items: rewards.itemId ? [{ itemId: rewards.itemId, count: rewards.count }] : undefined,
+        gold: rewards.gold > 0 ? rewards.gold : undefined,
+      });
     }
     this.saveGame();
     return { success: true, day: today, rewards };
+  }
+
+  /** 从服务端拉取签到状态并同步本地缓存（面板打开时调用） */
+  async refreshCheckInFromServer(): Promise<void> {
+    if (!isAuthenticated()) return;
+    try {
+      const status = await checkInApi.getStatus();
+      this.checkInDays = status.checkInDays || [];
+      this.checkInWeekKey = status.weekKey || this.checkInWeekKey;
+      this.saveGame();
+    } catch (e) {
+      console.warn('[GameEngine] refreshCheckInFromServer failed:', e);
+    }
   }
 
   // 获取签到状态
@@ -8012,8 +8545,10 @@ export class GameEngine {
     }
   }
 
-  // 领取在线奖励
-  claimOnlineReward(): { success: boolean; tier: number; rewards: { itemId: string; count: number; gold: number } } {
+  /**
+   * 领取在线奖励：优先调用服务端 /api/online-reward/claim/{tier}，失败时降级到本地逻辑
+   */
+  async claimOnlineReward(): Promise<{ success: boolean; tier: number; rewards: { itemId: string; count: number; gold: number } }> {
     const nextTier = this.onlineRewardClaimed + 1;
     if (nextTier > 4) {
       return { success: false, tier: 0, rewards: { itemId: '', count: 0, gold: 0 } };
@@ -8022,18 +8557,74 @@ export class GameEngine {
     if (this.onlineMinutes < requiredMinutes) {
       return { success: false, tier: 0, rewards: { itemId: '', count: 0, gold: 0 } };
     }
-    this.onlineRewardClaimed = nextTier;
-    const rewards = this.getOnlineReward(nextTier);
-    if (rewards.itemId) {
-      for (let i = 0; i < rewards.count; i++) {
-        this.addToInventory(rewards.itemId);
+
+    // 已登录：调用服务端领取接口（服务端权威）
+    if (isAuthenticated()) {
+      try {
+        const result = await onlineRewardApi.claim(nextTier);
+        if (result.success) {
+          this.onlineRewardClaimed = result.tier;
+          // 奖励发送到邮箱（玩家需在邮箱中领取）
+          const r = result.reward || { itemId: '', count: 0, gold: 0 };
+          if (r.itemId || r.gold > 0) {
+            const itemDef = r.itemId ? getItemDef(r.itemId) : undefined;
+            const bodyParts: string[] = [];
+            if (r.itemId && r.count > 0) {
+              bodyParts.push(`${itemDef?.name || r.itemId} x${r.count}`);
+            }
+            if (r.gold > 0) {
+              bodyParts.push(`${r.gold} 金币`);
+            }
+            this.sendRewardMail({
+              title: `在线奖励 第${result.tier}档`,
+              body: `在线奖励已发放：${bodyParts.join('、')}。请在邮箱中领取附件。`,
+              items: r.itemId ? [{ itemId: r.itemId, count: r.count }] : undefined,
+              gold: r.gold > 0 ? r.gold : undefined,
+            });
+          }
+          this.saveGame();
+          return { success: true, tier: result.tier, rewards: r };
+        }
+        return { success: false, tier: 0, rewards: { itemId: '', count: 0, gold: 0 } };
+      } catch (e) {
+        console.warn('[GameEngine] claimOnlineReward API failed, fallback to local:', e);
       }
     }
-    if (rewards.gold > 0) {
-      this.addGold(rewards.gold);
+
+    // 本地降级逻辑
+    this.onlineRewardClaimed = nextTier;
+    const rewards = this.getOnlineReward(nextTier);
+    if (rewards.itemId || rewards.gold > 0) {
+      const itemDef = rewards.itemId ? getItemDef(rewards.itemId) : undefined;
+      const bodyParts: string[] = [];
+      if (rewards.itemId && rewards.count > 0) {
+        bodyParts.push(`${itemDef?.name || rewards.itemId} x${rewards.count}`);
+      }
+      if (rewards.gold > 0) {
+        bodyParts.push(`${rewards.gold} 金币`);
+      }
+      this.sendRewardMail({
+        title: `在线奖励 第${nextTier}档`,
+        body: `在线奖励已发放：${bodyParts.join('、')}。请在邮箱中领取附件。`,
+        items: rewards.itemId ? [{ itemId: rewards.itemId, count: rewards.count }] : undefined,
+        gold: rewards.gold > 0 ? rewards.gold : undefined,
+      });
     }
     this.saveGame();
     return { success: true, tier: nextTier, rewards };
+  }
+
+  /** 从服务端拉取在线奖励状态并同步本地缓存 */
+  async refreshOnlineRewardFromServer(): Promise<void> {
+    if (!isAuthenticated()) return;
+    try {
+      const status = await onlineRewardApi.getStatus(this.onlineMinutes);
+      this.onlineMinutes = status.onlineMinutes || this.onlineMinutes;
+      this.onlineRewardClaimed = status.claimedLevel || this.onlineRewardClaimed;
+      this.saveGame();
+    } catch (e) {
+      console.warn('[GameEngine] refreshOnlineRewardFromServer failed:', e);
+    }
   }
 
   // 获取在线奖励状态
@@ -8208,8 +8799,11 @@ export class GameEngine {
     };
   }
 
-  // 设置押注（按水果种类；左键 +1 / 右键 -1，由 delta 控制；直接消耗硬币）
-  setLotteryBet(categoryId: string, delta: number): { success: boolean; bets: Record<string, number>; coins: number; msg?: string } {
+  /**
+   * 设置押注（按水果种类；左键 +1 / 右键 -1，由 delta 控制；直接消耗硬币）
+   * 优先调用服务端 /api/lottery/place-bet 同步硬币与押注，失败时降级到本地
+   */
+  async setLotteryBet(categoryId: string, delta: number): Promise<{ success: boolean; bets: Record<string, number>; coins: number; msg?: string }> {
     const valid = GameEngine.LOTTERY_CATEGORIES.some(c => c.id === categoryId);
     if (!valid) {
       return { success: false, bets: { ...this.lotteryBets }, coins: this.lotteryCoins, msg: '种类无效' };
@@ -8227,10 +8821,27 @@ export class GameEngine {
       if (this.lotteryCoins < delta) {
         return { success: false, bets: { ...this.lotteryBets }, coins: this.lotteryCoins, msg: '硬币不足' };
       }
+    }
+
+    // 已登录：调用服务端押注接口（服务端权威管理硬币与押注）
+    if (isAuthenticated()) {
+      try {
+        const result = await lotteryApi.placeBet({ categoryId, amount: delta });
+        // 用服务端返回的权威状态更新本地
+        this.lotteryCoins = result.lotteryCoins;
+        this.lotteryBets = result.bets || {};
+        this.saveGame();
+        return { success: true, bets: { ...this.lotteryBets }, coins: this.lotteryCoins };
+      } catch (e) {
+        console.warn('[GameEngine] setLotteryBet API failed, fallback to local:', e);
+      }
+    }
+
+    // 本地降级逻辑
+    if (delta > 0) {
       this.lotteryCoins -= delta;
       this.lotteryBets[categoryId] = next;
     } else if (delta < 0) {
-      // 减少押注，退还硬币
       this.lotteryCoins += -delta;
       this.lotteryBets[categoryId] = next;
       if (next === 0) delete this.lotteryBets[categoryId];
@@ -8239,8 +8850,25 @@ export class GameEngine {
     return { success: true, bets: { ...this.lotteryBets }, coins: this.lotteryCoins };
   }
 
-  // 清空押注（退还所有硬币）
-  clearLotteryBets(): { coins: number } {
+  /**
+   * 清空押注（退还所有硬币）
+   * 优先调用服务端 /api/lottery/clear-bets，失败时降级到本地
+   */
+  async clearLotteryBets(): Promise<{ coins: number }> {
+    // 已登录：调用服务端清空押注接口
+    if (isAuthenticated()) {
+      try {
+        const result = await lotteryApi.clearBets();
+        this.lotteryCoins = result.lotteryCoins;
+        this.lotteryBets = {};
+        this.saveGame();
+        return { coins: this.lotteryCoins };
+      } catch (e) {
+        console.warn('[GameEngine] clearLotteryBets API failed, fallback to local:', e);
+      }
+    }
+
+    // 本地降级逻辑
     let total = 0;
     Object.values(this.lotteryBets).forEach(b => total += b);
     this.lotteryCoins += total;
@@ -8319,8 +8947,15 @@ export class GameEngine {
     return Object.values(rewards);
   }
 
-  // 执行一次跑马灯旋转
-  spinLottery(): {
+  /**
+   * 执行一次跑马灯旋转
+   * 优先调用服务端 /api/lottery/spin 获取权威停格结果与硬币状态；
+   * 后端 SpinOutput 仅返回 cellIndex/winAmount/coins 等基础字段，
+   * 前端需要 Lucky 子玩法/开火车/大满贯等丰富动画数据，
+   * 因此服务端返回的 cellIndex 用于校验停格，详细动画仍由本地 rollLotteryCell 计算
+   * （后续后端补充完整 SpinOutput 后可改为完全服务端权威，见 docs/MISSING_API.md）
+   */
+  async spinLottery(): Promise<{
     success: boolean;
     stopCell: number;              // 跑马灯最终停下的格子（0-23）
     winningCells: number[];        // 所有中奖格子（普通单格 / Lucky 多格 / 大满贯全格）
@@ -8337,7 +8972,7 @@ export class GameEngine {
     luckyTrainStop?: number;        // Lucky 开火车：火车终点（实际中奖格子 id）
     trainLength?: number;           // Lucky 开火车：火车长度（连续高亮的格子数 = 火车走的步数 + 1）
     msg?: string;
-  } {
+  }> {
     this.refreshLotteryDaily();
     const totalBet = Object.values(this.lotteryBets).reduce((s, b) => s + b, 0);
 
@@ -8347,17 +8982,51 @@ export class GameEngine {
       if (totalBet <= 0) {
         return { success: false, stopCell: 0, winningCells: [], winningCategory: null, betOnStop: 0, win: 0, rewardItems: [], msg: '请先押注' };
       }
-      // 每次旋转扣除当前押注（保留投注不清空，玩家可连续使用上局投注）
       if (this.lotteryCoins < totalBet) {
         return { success: false, stopCell: 0, winningCells: [], winningCategory: null, betOnStop: 0, win: 0, rewardItems: [], msg: '硬币不足' };
       }
-      this.lotteryCoins -= totalBet;
-    } else {
-      this.lotteryFreeSpins--;
     }
 
-    // 跑马灯停下位置（按权重随机 + Lucky 保底累积）
-    const stopCell = this.rollLotteryCell();
+    // 已登录：调用服务端 spin 接口同步硬币与历史
+    let serverCell: number | null = null;
+    if (isAuthenticated()) {
+      try {
+        const result = await lotteryApi.spin();
+        // 服务端权威更新硬币/历史/免费旋转
+        this.lotteryCoins = result.lotteryCoins;
+        if (result.history) this.lotteryHistory = result.history;
+        if (result.freeSpinEarned) this.lotteryFreeSpins += result.freeSpinEarned;
+        // 服务端返回的 cellIndex 作为停格（若与本地权重模型一致则直接采用）
+        if (typeof result.cellIndex === 'number') {
+          serverCell = result.cellIndex;
+        }
+        // 发放服务端返回的奖励（金币/物品）
+        if (result.rewards) {
+          for (const r of result.rewards) {
+            if (r.gold) this.addGold(r.gold);
+            if (r.itemId && r.count) {
+              for (let i = 0; i < r.count; i++) {
+                this.addToInventory(r.itemId);
+              }
+            }
+          }
+        }
+      } catch (e) {
+        console.warn('[GameEngine] spinLottery API failed, using local simulation:', e);
+      }
+    }
+
+    // 本地扣硬币/免费旋转（若服务端未同步）
+    if (serverCell === null) {
+      if (!isFreeSpin) {
+        this.lotteryCoins -= totalBet;
+      } else {
+        this.lotteryFreeSpins--;
+      }
+    }
+
+    // 跑马灯停下位置：优先采用服务端 cellIndex，否则本地 rollLotteryCell
+    const stopCell = serverCell !== null ? serverCell : this.rollLotteryCell();
     const item = GameEngine.LOTTERY_ITEMS[stopCell];
     const isLucky = item.size === 'special' && (item.key === 'lucky_1' || item.key === 'lucky_2');
     // 更新 Lucky 保底累积：命中则重置，未命中则 +1
@@ -8525,6 +9194,7 @@ export class GameEngine {
   }
 
   saveGame(): void {
+    const p = this.player as any;
     const saveData = {
       player: {
         level: this.player.level,
@@ -8538,6 +9208,28 @@ export class GameEngine {
         attack: this.player.attack,
         attackSpeed: this.player.attackSpeed,
         range: this.player.range,
+      },
+      // —— PK 真实属性快照：后端 /pk/player-stats 从此节点读取，避免用 power+level 估算假属性 ——
+      // 口径：与 engine 内部 this.player 完全一致（attackSpeed = 毫秒/次，critRate = 百分数，critDamage = 百分数加成）
+      statsSnapshot: {
+        attack: this.player.attack,
+        attackSpeed: this.player.attackSpeed,
+        range: this.player.range,
+        maxHealth: this.player.maxHealth,
+        critRate: p.critRate ?? 0,
+        critDamage: p.critDamage ?? 50,
+        defense: p.defense ?? 0,
+        physicalPenetration: p.physicalPenetration ?? 0,
+        resistance: p.resistance ?? 0,
+        elementalDamageBonus: p.elementalDamageBonus ?? { fire: 0, ice: 0, lightning: 0, poison: 0 },
+        fireDamageBonus: p.fireDamageBonus ?? 0,
+        iceDamageBonus: p.iceDamageBonus ?? 0,
+        lightningDamageBonus: p.lightningDamageBonus ?? 0,
+        poisonDamageBonus: p.poisonDamageBonus ?? 0,
+        fireResistance: p.fireResistance ?? 0,
+        iceResistance: p.iceResistance ?? 0,
+        lightningResistance: p.lightningResistance ?? 0,
+        poisonResistance: p.poisonResistance ?? 0,
       },
       gameState: {
         currentWave: this.gameState.currentWave,
@@ -8571,18 +9263,26 @@ export class GameEngine {
       lotteryFreeSpins: this.lotteryFreeSpins,
       lotteryLuckyMissCounter: this.lotteryLuckyMissCounter,
     };
-    try {
-      localStorage.setItem('shotsGameSave', JSON.stringify(saveData));
-    } catch (e) {
-      console.warn('Failed to save game:', e);
-    }
+    // 通过 SaveService 同步写本地 + 异步推送 API（防抖合并）
+    saveLocal(saveData);
+  }
+
+  /** 从服务端拉取存档并写入本地缓存（登录后调用一次） */
+  async loadFromServer(): Promise<boolean> {
+    return await loadFromServer();
+  }
+
+  /** 强制推送当前存档到服务端（如返回主界面、退出战斗时） */
+  async flushSave(): Promise<void> {
+    // 先确保最新数据写入本地缓存
+    this.saveGame();
+    await flushSave();
   }
 
   loadGame(): boolean {
     try {
-      const saveStr = localStorage.getItem('shotsGameSave');
-      if (!saveStr) return false;
-      const saveData = JSON.parse(saveStr);
+      const saveData = loadLocal<any>();
+      if (!saveData) return false;
       
       if (saveData.player) {
         this.player.level = saveData.player.level || 1;

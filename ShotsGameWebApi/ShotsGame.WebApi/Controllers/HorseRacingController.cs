@@ -78,7 +78,7 @@ public class HorseRacingController : AppControllerBase
     /// <param name="input">下注参数，包含马匹 ID 与下注金币数量</param>
     /// <returns>更新后的赛会信息 RaceSessionOutput（含玩家下注记录）</returns>
     [HttpPost("session/{sessionId}/bet")]
-    public async Task<IActionResult> PlaceBetAsync(string sessionId, PlaceHorseBetInput input)
+    public async Task<IActionResult> PlaceBetAsync(string sessionId, [FromBody] PlaceHorseBetInput input)
     {
         var playerId = GetCurrentUserId();
         if (string.IsNullOrEmpty(playerId))
@@ -112,7 +112,7 @@ public class HorseRacingController : AppControllerBase
     /// <param name="input">取消下注参数，包含目标马匹 ID</param>
     /// <returns>更新后的赛会信息 RaceSessionOutput（含玩家下注记录）</returns>
     [HttpPost("session/{sessionId}/cancel-bet")]
-    public async Task<IActionResult> CancelBetAsync(string sessionId, CancelHorseBetInput input)
+    public async Task<IActionResult> CancelBetAsync(string sessionId, [FromBody] CancelHorseBetInput input)
     {
         var playerId = GetCurrentUserId();
         if (string.IsNullOrEmpty(playerId))

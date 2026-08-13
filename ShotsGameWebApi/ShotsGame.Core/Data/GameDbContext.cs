@@ -26,6 +26,10 @@ public class GameDbContext : DbContext
     public DbSet<SaveDataSnapshot> SaveDataSnapshots => Set<SaveDataSnapshot>();
     public DbSet<QuizAttempt> QuizAttempts => Set<QuizAttempt>();
     public DbSet<LotteryPotRecord> LotteryPotRecords => Set<LotteryPotRecord>();
+    /// <summary>聊天消息集合</summary>
+    public DbSet<ChatMessage> ChatMessages => Set<ChatMessage>();
+    /// <summary>PK对战记录集合</summary>
+    public DbSet<PkRecord> PkRecords => Set<PkRecord>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -48,6 +52,8 @@ public class GameDbContext : DbContext
         ConfigureSaveDataSnapshot(modelBuilder);
         ConfigureQuizAttempt(modelBuilder);
         ConfigureLotteryPotRecord(modelBuilder);
+        ConfigureChatMessage(modelBuilder);
+        ConfigurePkRecord(modelBuilder);
         ConfigureGlobalQueryFilters(modelBuilder);
     }
 
@@ -281,6 +287,43 @@ public class GameDbContext : DbContext
                 .WithMany()
                 .HasForeignKey(e => e.PlayerId)
                 .OnDelete(DeleteBehavior.Cascade);
+        });
+    }
+
+    /// <summary>配置聊天消息：频道与发送时间索引，关联玩家</summary>
+    private static void ConfigureChatMessage(ModelBuilder modelBuilder)
+    {
+        modelBuilder.Entity<ChatMessage>(entity =>
+        {
+            entity.HasIndex(e => e.Channel);
+            entity.HasIndex(e => new { e.Channel, e.SentAt });
+            entity.HasIndex(e => e.PlayerId);
+
+            entity.HasOne(e => e.Player)
+                .WithMany()
+                .HasForeignKey(e => e.PlayerId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+    }
+
+    /// <summary>配置PK对战记录：挑战方/应战方索引，关联双方玩家</summary>
+    private static void ConfigurePkRecord(ModelBuilder modelBuilder)
+    {
+        modelBuilder.Entity<PkRecord>(entity =>
+        {
+            entity.HasIndex(e => e.ChallengerId);
+            entity.HasIndex(e => e.DefenderId);
+            entity.HasIndex(e => e.PlayedAt);
+
+            entity.HasOne(e => e.Challenger)
+                .WithMany()
+                .HasForeignKey(e => e.ChallengerId)
+                .OnDelete(DeleteBehavior.Restrict);
+
+            entity.HasOne(e => e.Defender)
+                .WithMany()
+                .HasForeignKey(e => e.DefenderId)
+                .OnDelete(DeleteBehavior.Restrict);
         });
     }
 

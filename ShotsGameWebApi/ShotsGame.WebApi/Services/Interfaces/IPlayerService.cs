@@ -26,6 +26,15 @@ public interface IPlayerService
     /// 获取战斗力排行榜前 N 名玩家
     /// </summary>
     /// <param name="top">排行榜返回前几名数量</param>
-    /// <returns>按战斗力降序排列的玩家列表</returns>
-    Task<List<LeaderboardEntryOutput>> GetLeaderboardAsync(int top);
+    /// <param name="sortBy">排序字段：power=战斗力降序、level=等级降序、score=积分降序（默认 power）</param>
+    /// <returns>按指定字段降序排列的玩家列表（含在线状态、PK胜率、关卡信息）</returns>
+    Task<List<LeaderboardEntryOutput>> GetLeaderboardAsync(int top, string sortBy = "power");
+
+    /// <summary>
+    /// 更新玩家统计信息（客户端上报战斗力、当前关卡最大关卡）
+    /// </summary>
+    /// <param name="playerId">玩家ID</param>
+    /// <param name="input">更新参数（Power/MaxStage，可选）</param>
+    /// <returns>更新后玩家档案输出，玩家不存在返回 null</returns>
+    Task<PlayerProfileOutput?> UpdateStatsAsync(string playerId, UpdatePlayerStatsInput input);
 }

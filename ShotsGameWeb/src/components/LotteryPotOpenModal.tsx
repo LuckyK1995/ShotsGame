@@ -5,14 +5,14 @@ import { ModalShell } from './ModalShell';
 
 interface EngineRef {
   current: {
-    openLotteryPot: () => {
+    openLotteryPot: () => Promise<{
       type: 'gold' | 'exp' | 'item';
       icon: string;
       name: string;
       color: string;
       amount: number;
       itemId?: string;
-    } | null;
+    } | null>;
     getLotteryPotCount: () => number;
   } | null;
 }
@@ -25,7 +25,7 @@ interface LotteryPotOpenModalProps {
 
 const REWARDS = GameEngine.LOTTERY_POT_REWARDS;
 
-type Reward = ReturnType<NonNullable<EngineRef['current']>['openLotteryPot']>;
+type Reward = Awaited<ReturnType<NonNullable<EngineRef['current']>['openLotteryPot']>>;
 
 const MAX_RETRY_MS = 5000;
 const RETRY_INTERVAL_MS = 100;
@@ -94,22 +94,39 @@ export function LotteryPotOpenModal({ engineRef, isOpen, onClose }: LotteryPotOp
 
     let prog = 0;
     let safetyMs = 0;
+    let resolving = false; // 防止 progress 到 100 后多次触发异步领取
     progressTimerRef.current = setInterval(() => {
-      prog += 2;
-      safetyMs += 50;
-      if (prog >= 100 || safetyMs >= 15000) {
-        prog = 100;
-        clearTimers();
-        let result: Reward = null;
-        try {
-          if (engineRef.current) result = engineRef.current.openLotteryPot();
-        } catch (e) { /* engine error: still reveal fallback */ }
-        setReward(result);
-        setPotCount(engineRef.current ? engineRef.current.getLotteryPotCount() : 0);
-        setProgress(100);
-        setPhase('revealed');
+      if (!resolving) {
+        prog += 2;
+        safetyMs += 50;
       }
-      setProgress(prog);
+      if (!resolving && (prog >= 100 || safetyMs >= 15000)) {
+        prog = 100;
+        resolving = true;
+        setProgress(100);
+        // 停止进度推进，但保留 icon 循环动画，等待异步结果返回
+        if (progressTimerRef.current) {
+          clearInterval(progressTimerRef.current);
+          progressTimerRef.current = null;
+        }
+        // 异步调用 openLotteryPot，结果到达后揭晓
+        void (async () => {
+          let result: Reward = null;
+          try {
+            if (engineRef.current) result = await engineRef.current.openLotteryPot();
+          } catch (e) { /* engine error: still reveal fallback */ }
+          if (!isOpenRef.current) return;
+          setReward(result);
+          setPotCount(engineRef.current ? engineRef.current.getLotteryPotCount() : 0);
+          setPhase('revealed');
+          // 异步结果返回后再清理 icon 循环动画
+          if (iconTimerRef.current) {
+            clearInterval(iconTimerRef.current);
+            iconTimerRef.current = null;
+          }
+        })();
+      }
+      if (!resolving) setProgress(prog);
     }, 50);
 
     let lastIdx = Math.floor(Math.random() * REWARDS.length);

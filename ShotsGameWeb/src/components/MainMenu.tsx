@@ -12,7 +12,12 @@ import { LotteryPanel } from './LotteryPanel';
 import { EquipmentMerchantPanel } from './EquipmentMerchantPanel';
 import { HorseRacingPanel } from './HorseRacingPanel';
 import { ModeIntroModal } from './ModeIntroModal';
+import { LeaderboardModal } from './LeaderboardModal';
+import PkModal from './PkModal';
+import type { OnlinePlayer } from '../api/modules/pk';
 import type { GameMode } from '../game/data/gameModes';
+import { GAME_MODE_CONFIGS } from '../game/data/gameModes';
+import { useGameStore } from '../store/gameStore';
 import {
   neonCyan, neonPurple, neonPink, neonYellow,
   neonGreen, neonBlue, neonOrange, neonRed
@@ -42,6 +47,7 @@ interface MainMenuProps {
   engineRef?: EngineRef;
   bottomInset?: number;
   onModalOpenChange?: (hasOpen: boolean) => void;
+  onStartPk?: (player: OnlinePlayer) => void;
 }
 
 interface ModeButton {
@@ -51,20 +57,32 @@ interface ModeButton {
   icon: string;
   color: string;
   unlocked: boolean;
+  unlockLevel: number;
 }
 
-const MODES: ModeButton[] = [
-  { id: 'stage', label: '关卡挑战', desc: '挑战无尽波次', icon: '/images/mode-stage.png', color: neonGreen, unlocked: true },
-  { id: 'worldboss', label: '世界BOSS', desc: '集结讨伐强敌', icon: '/images/mode-worldboss.png', color: neonRed, unlocked: true },
-  { id: 'purgatory', label: '炼狱', desc: '极限生存挑战', icon: '/images/mode-purgatory.png', color: neonOrange, unlocked: true },
-  { id: 'daily', label: '日常挑战', desc: '每日限定任务', icon: '/images/mode-daily.png', color: neonYellow, unlocked: true },
-  { id: 'material', label: '材料副本', desc: '收集稀有材料', icon: '/images/mode-material.png', color: neonPurple, unlocked: true },
-  { id: 'mirror', label: '镜像挑战', desc: '挑战自我镜像', icon: '/images/mode-mirror.png', color: neonBlue, unlocked: true },
-  { id: 'guard', label: '守卫战', desc: '坚守阵地', icon: '/images/mode-guard.png', color: neonCyan, unlocked: true },
-  { id: 'homedefense', label: '家园守卫', desc: '守护最后家园', icon: '/images/mode-homedefense.png', color: neonGreen, unlocked: true },
-];
+// 模式按钮统一从 GAME_MODE_CONFIGS 派生（单一数据源），按 unlockLevel 升序排列
+// 解锁状态在组件内根据玩家等级动态计算
+const MODE_ORDER: GameMode[] = (Object.keys(GAME_MODE_CONFIGS) as GameMode[])
+  .sort((a, b) => GAME_MODE_CONFIGS[a].unlockLevel - GAME_MODE_CONFIGS[b].unlockLevel);
 
-export function MainMenu({ onEnterStage, engineRef, bottomInset = 0, onModalOpenChange }: MainMenuProps) {
+function buildModes(playerLevel: number): ModeButton[] {
+  return MODE_ORDER.map(id => {
+    const cfg = GAME_MODE_CONFIGS[id];
+    return {
+      id: cfg.id,
+      label: cfg.name,
+      desc: cfg.description,
+      icon: `/images/mode-${cfg.id}.png`,
+      color: cfg.color,
+      unlocked: playerLevel >= cfg.unlockLevel,
+      unlockLevel: cfg.unlockLevel,
+    };
+  });
+}
+
+export function MainMenu({ onEnterStage, engineRef, bottomInset = 0, onModalOpenChange, onStartPk }: MainMenuProps) {
+  const playerLevel = useGameStore(s => s.player?.level ?? 1);
+  const modes = buildModes(playerLevel);
   const [toast, setToast] = useState<string | null>(null);
   const [hoverId, setHoverId] = useState<string | null>(null);
   const [quizModalOpen, setQuizModalOpen] = useState(false);
@@ -73,14 +91,16 @@ export function MainMenu({ onEnterStage, engineRef, bottomInset = 0, onModalOpen
   const [lotteryOpen, setLotteryOpen] = useState(false);
   const [merchantOpen, setMerchantOpen] = useState(false);
   const [horseRacingOpen, setHorseRacingOpen] = useState(false);
+  const [leaderboardOpen, setLeaderboardOpen] = useState(false);
+  const [pkOpen, setPkOpen] = useState(false);
   // 模式介绍弹窗：非关卡模式点击后先弹出介绍
   const [introMode, setIntroMode] = useState<GameMode | null>(null);
 
   // 通知父组件：当前是否有任意弹窗打开
   useEffect(() => {
-    const hasOpen = quizModalOpen || checkInOpen || onlineRewardOpen || lotteryOpen || merchantOpen || horseRacingOpen || introMode !== null;
+    const hasOpen = quizModalOpen || checkInOpen || onlineRewardOpen || lotteryOpen || merchantOpen || horseRacingOpen || leaderboardOpen || pkOpen || introMode !== null;
     onModalOpenChange?.(hasOpen);
-  }, [quizModalOpen, checkInOpen, onlineRewardOpen, lotteryOpen, merchantOpen, horseRacingOpen, introMode, onModalOpenChange]);
+  }, [quizModalOpen, checkInOpen, onlineRewardOpen, lotteryOpen, merchantOpen, horseRacingOpen, leaderboardOpen, pkOpen, introMode, onModalOpenChange]);
 
   const neonText: React.CSSProperties = {
     fontFamily: '"Rajdhani", "Orbitron", "Courier New", monospace',
@@ -90,7 +110,7 @@ export function MainMenu({ onEnterStage, engineRef, bottomInset = 0, onModalOpen
 
   const handleModeClick = (mode: ModeButton) => {
     if (!mode.unlocked) {
-      setToast(`【${mode.label}】即将开放，敬请期待`);
+      setToast(`【${mode.label}】Lv.${mode.unlockLevel} 解锁`);
       setTimeout(() => setToast(null), 1800);
       return;
     }
@@ -543,11 +563,75 @@ export function MainMenu({ onEnterStage, engineRef, bottomInset = 0, onModalOpen
         })()}
       </div>
 
-      {/* 左侧功能按钮 - 赛马 + 抽奖机 + 装备商人 */}
+      {/* 左侧功能按钮 - 排行榜 + PK + 赛马 + 抽奖机 + 装备商人 */}
       <div
         className="absolute flex flex-col gap-4 z-20"
         style={{ left: '12px', top: '12%' }}
       >
+        {/* 排行榜按钮 */}
+        {(() => {
+          const c = neonCyan;
+          const isHover = hoverId === 'leaderboard';
+          return (
+            <div className="flex flex-col items-center" style={{ gap: '2px' }}>
+              <button
+                onClick={() => setLeaderboardOpen(true)}
+                onMouseEnter={() => setHoverId('leaderboard')}
+                onMouseLeave={() => setHoverId(null)}
+                style={{
+                  position: 'relative',
+                  width: '48px',
+                  height: '48px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  background: 'transparent',
+                  border: 'none',
+                  cursor: 'pointer',
+                  transition: 'all 0.2s ease',
+                  filter: isHover ? `drop-shadow(0 0 8px ${c}80)` : `drop-shadow(0 0 4px ${c}40)`,
+                }}
+              >
+                <div style={{ animation: 'btn-icon-breathe 2s ease-in-out infinite', transform: isHover ? 'scale(1.1)' : 'scale(1)', transition: 'transform 0.2s ease' }}>
+                  <img src="/images/btn-leaderboard.png" alt="排行榜" style={{ width: '34px', height: '34px', objectFit: 'contain', objectPosition: 'center' }} />
+                </div>
+              </button>
+              <div style={{ ...neonText, fontSize: '7px', color: c, textShadow: `0 0 4px ${c}80`, letterSpacing: '0.5px', lineHeight: 1, opacity: isHover ? 1 : 0.8, marginTop: '-2px' }}>排行榜</div>
+            </div>
+          );
+        })()}
+        {/* PK挑战按钮 */}
+        {(() => {
+          const c = neonPink;
+          const isHover = hoverId === 'pk';
+          return (
+            <div className="flex flex-col items-center" style={{ gap: '2px' }}>
+              <button
+                onClick={() => setPkOpen(true)}
+                onMouseEnter={() => setHoverId('pk')}
+                onMouseLeave={() => setHoverId(null)}
+                style={{
+                  position: 'relative',
+                  width: '48px',
+                  height: '48px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  background: 'transparent',
+                  border: 'none',
+                  cursor: 'pointer',
+                  transition: 'all 0.2s ease',
+                  filter: isHover ? `drop-shadow(0 0 8px ${c}80)` : `drop-shadow(0 0 4px ${c}40)`,
+                }}
+              >
+                <div style={{ animation: 'btn-icon-breathe 2.2s ease-in-out infinite', transform: isHover ? 'scale(1.1)' : 'scale(1)', transition: 'transform 0.2s ease' }}>
+                  <img src="/images/btn-pk.png" alt="PK挑战" style={{ width: '34px', height: '34px', objectFit: 'contain', objectPosition: 'center' }} />
+                </div>
+              </button>
+              <div style={{ ...neonText, fontSize: '7px', color: c, textShadow: `0 0 4px ${c}80`, letterSpacing: '0.5px', lineHeight: 1, opacity: isHover ? 1 : 0.8, marginTop: '-2px' }}>PK挑战</div>
+            </div>
+          );
+        })()}
         {/* 赛马按钮（放在抽奖机上方） */}
         {(() => {
           const c = neonPurple;
@@ -716,7 +800,7 @@ export function MainMenu({ onEnterStage, engineRef, bottomInset = 0, onModalOpen
             maxWidth: '430px',
           }}
         >
-          {MODES.map((mode, idx) => {
+          {modes.map((mode, idx) => {
             const isHover = hoverId === mode.id;
             const num = String(idx + 1).padStart(2, '0');
             return (
@@ -910,13 +994,18 @@ export function MainMenu({ onEnterStage, engineRef, bottomInset = 0, onModalOpen
                   <div
                     style={{
                       position: 'absolute',
-                      top: '3px',
+                      top: '2px',
                       right: '4px',
+                      ...neonText,
                       fontSize: '7px',
-                      opacity: 0.8,
+                      color: neonYellow,
+                      textShadow: `0 0 4px ${neonYellow}80`,
+                      opacity: 0.95,
+                      letterSpacing: '0.3px',
+                      pointerEvents: 'none',
                     }}
                   >
-                    🔒
+                    Lv.{mode.unlockLevel}
                   </div>
                 )}
               </button>
@@ -964,6 +1053,18 @@ export function MainMenu({ onEnterStage, engineRef, bottomInset = 0, onModalOpen
           <HorseRacingPanel engineRef={engineRef as any} isOpen={horseRacingOpen} onClose={() => setHorseRacingOpen(false)} />
         </>
       )}
+
+      {/* 排行榜弹窗 */}
+      <LeaderboardModal isOpen={leaderboardOpen} onClose={() => setLeaderboardOpen(false)} />
+      {/* PK挑战弹窗 */}
+      <PkModal
+        isOpen={pkOpen}
+        onClose={() => setPkOpen(false)}
+        onStartPk={(player) => {
+          setPkOpen(false);
+          onStartPk?.(player);
+        }}
+      />
 
       {/* 模式介绍弹窗：点击进入后开始游戏 */}
       {introMode && (

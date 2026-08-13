@@ -71,7 +71,7 @@ public class CalculateController : AppControllerBase
     /// <param name="input">金币计算参数，包含基础金币和加成倍率相关信息</param>
     /// <returns>金币计算结果 GoldCalculationOutput（含最终金币数量及各加成明细）</returns>
     [HttpPost("gold")]
-    public async Task<IActionResult> CalculateGoldAsync(GoldCalculationInput input)
+    public async Task<IActionResult> CalculateGoldAsync([FromBody] GoldCalculationInput input)
     {
         var playerId = GetCurrentUserId();
         if (string.IsNullOrEmpty(playerId))

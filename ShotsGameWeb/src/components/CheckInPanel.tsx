@@ -1,13 +1,13 @@
 import { useState, useEffect, useCallback } from 'react';
-import { useGameStore } from '../store/gameStore';
-import { ITEMS, getItemDef } from '../game/data/equipment';
+import { getItemDef } from '../game/data/equipment';
 import { neonCyan, neonPurple, neonPink, neonYellow, neonGreen, neonText } from '../theme/colors';
 import { ModalHudBackground } from './ModalHudBackground';
 
 interface EngineRef {
   current: {
-    checkIn: () => { success: boolean; day: number; rewards: { itemId: string; count: number; gold: number } };
+    checkIn: () => Promise<{ success: boolean; day: number; rewards: { itemId: string; count: number; gold: number } }>;
     getCheckInStatus: () => { days: number[]; todayChecked: boolean; weekKey: string };
+    refreshCheckInFromServer?: () => Promise<void>;
   } | null;
 }
 
@@ -17,7 +17,7 @@ interface CheckInPanelProps {
   onClose: () => void;
 }
 
-const DAY_LABELS = ['周一', '周二', '周三', '周四', '周五', '周六', '周日'];
+const DAY_LABELS = ['一', '二', '三', '四', '五', '六', '日'];
 
 const CHECK_IN_REWARDS = [
   { itemId: 'health_potion', count: 5, gold: 200, icon: '❤️' },
@@ -40,26 +40,36 @@ export function CheckInPanel({ engineRef, isOpen, onClose }: CheckInPanelProps) 
   }, [engineRef]);
 
   useEffect(() => {
-    if (isOpen) refreshStatus();
-  }, [isOpen, refreshStatus]);
+    if (isOpen) {
+      void engineRef.current?.refreshCheckInFromServer?.().then(() => refreshStatus());
+    }
+  }, [isOpen, refreshStatus, engineRef]);
 
   if (!isOpen) return null;
 
-  const handleCheckIn = () => {
+  const handleCheckIn = async () => {
     if (!engineRef.current) return;
-    const result = engineRef.current.checkIn();
-    if (result.success) {
-      const itemDef = getItemDef(result.rewards.itemId);
-      const msg = result.rewards.gold > 0
-        ? `签到成功！获得 ${itemDef?.name || result.rewards.itemId} x${result.rewards.count} + ${result.rewards.gold}金币`
-        : `签到成功！获得 ${itemDef?.name || result.rewards.itemId} x${result.rewards.count}`;
-      setToast(msg);
-      setTimeout(() => setToast(null), 2000);
-    } else {
-      setToast('今日已签到');
+    try {
+      const result = await engineRef.current.checkIn();
+      if (result.success) {
+        const itemDef = getItemDef(result.rewards.itemId);
+        const parts: string[] = [];
+        if (result.rewards.itemId && result.rewards.count > 0) {
+          parts.push(`${itemDef?.name || result.rewards.itemId} x${result.rewards.count}`);
+        }
+        if (result.rewards.gold > 0) parts.push(`${result.rewards.gold}金币`);
+        setToast(parts.length > 0 ? `奖励已发送至邮箱：${parts.join('、')}` : '签到成功，奖励已发送至邮箱');
+        setTimeout(() => setToast(null), 2200);
+      } else {
+        setToast('今日已签到');
+        setTimeout(() => setToast(null), 1500);
+      }
+      refreshStatus();
+    } catch (e) {
+      setToast('签到失败，请重试');
       setTimeout(() => setToast(null), 1500);
+      refreshStatus();
     }
-    refreshStatus();
   };
 
   const todayIndex = (() => {
@@ -69,97 +79,116 @@ export function CheckInPanel({ engineRef, isOpen, onClose }: CheckInPanelProps) 
 
   return (
     <div
-      className="absolute left-0 right-0 z-50 flex items-center justify-center"
-      style={{
-        top: 0,
-        bottom: 0,
-        background: 'rgba(5, 3, 15, 0.85)',
-        backdropFilter: 'blur(6px)',
-      }}
+      className="absolute inset-0 flex items-center justify-center z-50"
+      style={{ background: 'rgba(5, 3, 15, 0.88)', backdropFilter: 'blur(6px)' }}
       onClick={onClose}
     >
       <div
-        className="relative flex flex-col items-center"
+        className="relative flex flex-col mx-auto"
         style={{
-          width: '90%',
-          maxWidth: 380,
-          background: 'linear-gradient(180deg, #1A1535 0%, #0D0B1A 100%)',
-          border: `1.5px solid ${neonPurple}60`,
-          borderRadius: 16,
-          boxShadow: `0 0 30px ${neonPurple}30, 0 0 60px ${neonCyan}10`,
-          padding: '20px 16px',
+          width: '300px',
+          height: '440px',
+          background: 'rgba(19, 16, 37, 0.95)',
+          border: `1px solid ${neonPurple}50`,
+          borderRadius: '14px',
+          boxShadow: `0 0 30px ${neonPurple}25, inset 0 1px 0 rgba(255,255,255,0.05)`,
+          backdropFilter: 'blur(12px)',
           overflow: 'hidden',
+          margin: 'auto',
         }}
         onClick={(e) => e.stopPropagation()}
       >
-        {/* HUD 背景：与按钮区不同纹路/颜色 */}
         <ModalHudBackground accentColor={neonPurple} accentColor2={neonCyan} />
-        <div className="relative w-full flex flex-col items-center" style={{ zIndex: 1 }}>
-          {/* 标题 */}
-          <div className="flex items-center justify-between w-full mb-4">
-            <span style={{ ...neonText, fontSize: 16, color: neonCyan, fontWeight: 700 }}>
-              📅 7日签到
+
+        <div className="relative flex flex-col flex-1 min-h-0" style={{ zIndex: 1, padding: '10px 10px' }}>
+          {/* 头部 */}
+          <div className="flex items-center justify-between mb-2 shrink-0">
+            <span style={{ ...neonText, fontSize: '13px', color: neonCyan, letterSpacing: '2px' }}>
+              📅 连续签到
             </span>
             <button
               onClick={onClose}
-              style={{
-                background: 'none',
-                border: `1px solid ${neonPurple}50`,
-                borderRadius: 6,
-                color: '#8A7FA8',
-                fontSize: 12,
-                padding: '2px 8px',
-                cursor: 'pointer',
-                fontFamily: 'inherit',
-              }}
-            >
-              ✕
-            </button>
+              style={{ ...neonText, fontSize: '14px', color: '#8B80A0', background: 'none', border: 'none', cursor: 'pointer', padding: '2px 4px' }}
+            >✕</button>
           </div>
 
-          {/* 7天签到格子 */}
-          <div className="grid grid-cols-4 gap-2 w-full mb-4">
+          {/* 本周进度 */}
+          <div className="flex items-center justify-between mb-2 shrink-0" style={{ ...neonText, fontSize: '8px' }}>
+            <span style={{ color: '#8B80A0' }}>本周已签 {status.days.length}/7 天</span>
+            <span style={{ color: neonYellow }}>奖励发送至邮箱</span>
+          </div>
+
+          {/* 7天签到格子（7列紧凑布局） */}
+          <div className="grid gap-1 mb-2 shrink-0" style={{ gridTemplateColumns: 'repeat(7, 1fr)' }}>
             {CHECK_IN_REWARDS.map((reward, idx) => {
               const checked = status.days.includes(idx);
               const isToday = idx === todayIndex;
-              const itemDef = getItemDef(reward.itemId);
-
               return (
                 <div
                   key={idx}
                   className="flex flex-col items-center"
                   style={{
                     background: checked
-                      ? `linear-gradient(180deg, ${neonGreen}15 0%, ${neonGreen}08 100%)`
+                      ? `${neonGreen}12`
                       : isToday
-                      ? `linear-gradient(180deg, ${neonPurple}20 0%, ${neonCyan}08 100%)`
-                      : 'rgba(19, 16, 37, 0.6)',
-                    border: `1.5px solid ${checked ? neonGreen + '80' : isToday ? neonCyan + '60' : 'rgba(176, 38, 255, 0.2)'}`,
-                    borderRadius: 10,
-                    padding: '8px 4px',
-                    opacity: checked ? 0.7 : 1,
+                      ? `${neonPurple}20`
+                      : 'rgba(13, 11, 26, 0.6)',
+                    border: `1px solid ${checked ? neonGreen + '60' : isToday ? neonCyan + '50' : 'rgba(100,100,130,0.25)'}`,
+                    borderRadius: '5px',
+                    padding: '3px 1px',
+                    opacity: checked ? 0.65 : 1,
                   }}
                 >
-                  <span style={{ fontSize: 10, color: '#8A7FA8', ...neonText, marginBottom: 2 }}>
-                    {DAY_LABELS[idx]}
+                  <span style={{ ...neonText, fontSize: '6px', color: '#8B80A0' }}>{DAY_LABELS[idx]}</span>
+                  <span style={{ fontSize: '11px', filter: checked ? 'grayscale(0.6)' : 'none' }}>
+                    {checked ? '✓' : reward.icon}
                   </span>
-                  <span style={{ fontSize: 20, filter: checked ? 'grayscale(0.5)' : 'none' }}>
-                    {checked ? '✅' : reward.icon}
-                  </span>
-                  <span style={{ fontSize: 8, color: neonCyan, ...neonText, marginTop: 2, textAlign: 'center' }}>
-                    {itemDef?.name?.slice(0, 4) || reward.itemId.slice(0, 4)}
-                  </span>
-                  <span style={{ fontSize: 7, color: neonYellow, ...neonText }}>
+                  <span style={{ ...neonText, fontSize: '5px', color: neonYellow, fontWeight: 700 }}>
                     x{reward.count}
                   </span>
-                  {reward.gold > 0 && (
-                    <span style={{ fontSize: 7, color: neonYellow, ...neonText }}>
-                      +{reward.gold}💰
-                    </span>
-                  )}
                 </div>
               );
             })}
+          </div>
+
+          {/* 奖励详情列表 */}
+          <div className="flex-1 min-h-0 overflow-y-auto" style={{ scrollbarWidth: 'thin' }}>
+            <div style={{ ...neonText, fontSize: '7px', color: '#5A5A7A', marginBottom: '4px', letterSpacing: '1px' }}>
+              ▸ 每日奖励明细
+            </div>
+            <div className="flex flex-col gap-1">
+              {CHECK_IN_REWARDS.map((reward, idx) => {
+                const checked = status.days.includes(idx);
+                const isToday = idx === todayIndex;
+                const itemDef = getItemDef(reward.itemId);
+                return (
+                  <div
+                    key={idx}
+                    className="flex items-center gap-1.5"
+                    style={{
+                      padding: '4px 5px',
+                      background: isToday ? `${neonCyan}10` : 'rgba(13, 11, 26, 0.5)',
+                      border: `1px solid ${isToday ? neonCyan + '40' : 'rgba(100,100,130,0.2)'}`,
+                      borderRadius: '5px',
+                      opacity: checked ? 0.5 : 1,
+                    }}
+                  >
+                    <span style={{ fontSize: '12px', width: '14px', textAlign: 'center' }}>{reward.icon}</span>
+                    <span style={{ ...neonText, fontSize: '7px', color: '#8B80A0', width: '18px' }}>周{DAY_LABELS[idx]}</span>
+                    <span style={{ ...neonText, fontSize: '8px', color: '#E0E0F0', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {itemDef?.name || reward.itemId}
+                    </span>
+                    <span style={{ ...neonText, fontSize: '7px', color: neonCyan }}>x{reward.count}</span>
+                    {reward.gold > 0 && (
+                      <span style={{ ...neonText, fontSize: '7px', color: neonYellow }}>+{reward.gold}</span>
+                    )}
+                    {checked && (
+                      <span style={{ ...neonText, fontSize: '7px', color: neonGreen }}>✓</span>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
           </div>
 
           {/* 签到按钮 */}
@@ -168,54 +197,44 @@ export function CheckInPanel({ engineRef, isOpen, onClose }: CheckInPanelProps) 
             disabled={status.todayChecked}
             style={{
               width: '100%',
-              padding: '10px 0',
+              marginTop: '8px',
+              padding: '7px 0',
               background: status.todayChecked
-                ? 'rgba(100, 90, 130, 0.3)'
-                : `linear-gradient(135deg, ${neonPurple} 0%, ${neonCyan} 100%)`,
-              border: `1.5px solid ${status.todayChecked ? '#555' : neonCyan}`,
-              borderRadius: 10,
-              color: status.todayChecked ? '#777' : '#fff',
-              fontSize: 14,
-              fontWeight: 700,
+                ? 'rgba(100,100,130,0.2)'
+                : `${neonPurple}30`,
+              border: `1px solid ${status.todayChecked ? '#5A5A7A' : neonCyan}`,
+              borderRadius: '6px',
+              ...neonText, fontSize: '10px',
+              color: status.todayChecked ? '#8B80A0' : neonCyan,
               cursor: status.todayChecked ? 'default' : 'pointer',
-              fontFamily: '"Rajdhani", "Orbitron", monospace',
               letterSpacing: '1px',
-              textShadow: status.todayChecked ? 'none' : `0 0 10px ${neonCyan}`,
-              boxShadow: status.todayChecked ? 'none' : `0 0 20px ${neonPurple}40`,
-              transition: 'all 0.2s ease',
+              boxShadow: status.todayChecked ? 'none' : `0 0 10px ${neonPurple}30`,
             }}
           >
-            {status.todayChecked ? '✅ 今日已签到' : '📝 立即签到'}
+            {status.todayChecked ? '✓ 今日已签到' : '📝 立即签到'}
           </button>
 
-          {/* 已签天数提示 */}
-          <div style={{ marginTop: 8, fontSize: 10, color: '#6A6480', ...neonText }}>
-            本周已签到 {status.days.length}/7 天
+          <div className="text-center mt-1" style={{ ...neonText, fontSize: '6px', color: '#5A5A7A', letterSpacing: '0.5px' }}>
+            签到后奖励自动发送至邮箱·请在邮箱领取
           </div>
-
-          {/* Toast */}
-          {toast && (
-            <div
-              style={{
-                position: 'absolute',
-                bottom: -30,
-                left: '50%',
-                transform: 'translateX(-50%)',
-                background: `linear-gradient(135deg, ${neonPurple}CC, ${neonCyan}CC)`,
-                color: '#fff',
-                padding: '6px 16px',
-                borderRadius: 8,
-                fontSize: 11,
-                fontWeight: 600,
-                whiteSpace: 'nowrap',
-                boxShadow: `0 0 15px ${neonCyan}50`,
-                ...neonText,
-              }}
-            >
-              {toast}
-            </div>
-          )}
         </div>
+
+        {/* Toast */}
+        {toast && (
+          <div
+            className="absolute left-1/2"
+            style={{
+              top: '30%', transform: 'translateX(-50%)',
+              padding: '6px 14px',
+              background: `${neonCyan}E0`,
+              border: `1px solid ${neonCyan}`,
+              borderRadius: '6px',
+              ...neonText, fontSize: '9px', color: '#FFFFFF',
+              zIndex: 10, boxShadow: `0 0 14px ${neonCyan}80`,
+              pointerEvents: 'none', whiteSpace: 'nowrap', maxWidth: '280px',
+            }}
+          >{toast}</div>
+        )}
       </div>
     </div>
   );

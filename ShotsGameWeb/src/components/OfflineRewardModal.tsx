@@ -1,12 +1,12 @@
 import { useState, useEffect } from 'react';
 import type { OfflineReward } from '../game/types/game';
+import { getLastOnline, setLastOnline } from '../game/saveService';
 
 interface OfflineRewardModalProps {
   playerLevel: number;
   highestWave: number;
 }
 
-const STORAGE_KEY = 'shotsGame_lastOnline';
 const MAX_OFFLINE_HOURS = 8;
 const MIN_OFFLINE_SECONDS = 60;
 
@@ -57,15 +57,16 @@ export function OfflineRewardModal({ playerLevel, highestWave }: OfflineRewardMo
   const [show, setShow] = useState(false);
 
   useEffect(() => {
-    const lastOnline = localStorage.getItem(STORAGE_KEY);
+    const lastTime = getLastOnline();
+    const now = Date.now();
 
-    if (!lastOnline) {
-      localStorage.setItem(STORAGE_KEY, Date.now().toString());
+    // 首次进入：仅初始化时间戳，不发放奖励
+    if (lastTime === 0 || now - lastTime > 7 * 24 * 3600 * 1000) {
+      // 超过 7 天视为首次或异常，初始化时间戳
+      setLastOnline(now);
       return;
     }
 
-    const lastTime = parseInt(lastOnline);
-    const now = Date.now();
     const elapsedSeconds = (now - lastTime) / 1000;
 
     if (elapsedSeconds >= MIN_OFFLINE_SECONDS) {
@@ -76,17 +77,17 @@ export function OfflineRewardModal({ playerLevel, highestWave }: OfflineRewardMo
       }
     }
 
-    localStorage.setItem(STORAGE_KEY, now.toString());
+    setLastOnline(now);
   }, [playerLevel, highestWave]);
 
   useEffect(() => {
     const handleBeforeUnload = () => {
-      localStorage.setItem(STORAGE_KEY, Date.now().toString());
+      setLastOnline(Date.now());
     };
 
     window.addEventListener('beforeunload', handleBeforeUnload);
     const interval = setInterval(() => {
-      localStorage.setItem(STORAGE_KEY, Date.now().toString());
+      setLastOnline(Date.now());
     }, 30000);
 
     return () => {

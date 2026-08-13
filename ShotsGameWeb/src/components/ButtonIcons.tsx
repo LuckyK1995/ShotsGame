@@ -1828,3 +1828,41 @@ export function MerchantIconV2({ size, color, active }: IconProps) {
     </svg>
   );
 }
+
+// 设置 - 赛博齿轮 + 扳手
+export function SettingsIconV2({ size, color, active }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" style={{ display: 'block', filter: `drop-shadow(0 0 ${active ? 4 : 2}px ${color})` }}>
+      {/* 六边形科技底板 */}
+      <path d="M12 1.5 L21 6.5 L21 17.5 L12 22.5 L3 17.5 L3 6.5 Z" fill={C.dark} opacity="0.9" stroke={C.deepPurple} strokeWidth="0.8" strokeLinejoin="round" />
+      <path d="M12 3 L19.5 7.2 L19.5 16.8 L12 21 L4.5 16.8 L4.5 7.2 Z" fill="none" stroke={C.purple} strokeWidth="0.4" opacity="0.7" />
+
+      {/* 主齿轮（流线型，8齿） */}
+      <g transform="translate(12 11)">
+        {/* 齿轮齿 */}
+        {[0, 45, 90, 135, 180, 225, 270, 315].map(deg => (
+          <rect key={deg} x="-1" y="-7" width="2" height="2.5" rx="0.5" fill={C.cyan} opacity="0.85" transform={`rotate(${deg})`} />
+        ))}
+        {/* 齿轮主体 */}
+        <circle r="4.5" fill={C.dark} stroke={C.cyan} strokeWidth="1.2" />
+        {/* 齿轮内圈 */}
+        <circle r="3" fill="none" stroke={C.purple} strokeWidth="0.5" opacity="0.6" />
+        {/* 中心孔 */}
+        <circle r="1.5" fill={C.dark} stroke={C.gold} strokeWidth="0.6" />
+        <circle r="0.5" fill={C.gold} opacity="0.9" />
+      </g>
+
+      {/* 扳手（右下，斜置） */}
+      <g transform="translate(17.5 17) rotate(45)" opacity="0.9">
+        <rect x="-0.6" y="0" width="1.2" height="5" rx="0.3" fill={C.pink} />
+        <path d="M-1.2 0 L-1.2 -1.5 L-0.6 -2 L0.6 -2 L1.2 -1.5 L1.2 0 Z" fill={C.pink} />
+      </g>
+
+      {/* 四角霓虹点 */}
+      <circle cx="4.2" cy="6.8" r="0.4" fill={C.cyan} opacity="0.9" />
+      <circle cx="19.8" cy="6.8" r="0.4" fill={C.pink} opacity="0.9" />
+      <circle cx="4.2" cy="17.2" r="0.4" fill={C.pink} opacity="0.9" />
+      <circle cx="19.8" cy="17.2" r="0.4" fill={C.cyan} opacity="0.9" />
+    </svg>
+  );
+}

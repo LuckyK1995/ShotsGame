@@ -1,5 +1,8 @@
-import { useState, useRef, useMemo, useCallback } from 'react';
+import { useState, useRef, useMemo, useCallback, useEffect } from 'react';
+import { createPortal } from 'react-dom';
+import { useAuthStore } from './store/authStore';
 import { useGameStore } from './store/gameStore';
+import { AuthPanel } from './components/auth/AuthPanel';
 import { GameCanvas, type GameCanvasHandle } from './components/GameCanvas';
 import { StatusBar } from './components/StatusBar';
 import { BossHealthBar } from './components/BossHealthBar';
@@ -26,6 +29,12 @@ import { ModalHudBackground } from './components/ModalHudBackground';
 import { neonYellow, neonPurple, neonCyan } from './theme/colors';
 import { MainMenu } from './components/MainMenu';
 import { CharacterPanel } from './components/CharacterPanel';
+import { ChatBox } from './components/ChatBox';
+import { ChatModal } from './components/ChatModal';
+import { SettingsModal } from './components/SettingsModal';
+import PkBattleScene from './components/PkBattleScene';
+import type { OnlinePlayer } from './api/modules/pk';
+import { pkApi } from './api/modules/pk';
 import {
   PixelButton,
   PixelCharIcon, PixelSkillIcon, PixelAchieveIcon, PixelSocialIcon,
@@ -69,6 +78,48 @@ const BAG_TABS = [
 
 function App() {
   const gameCanvasRef = useRef<GameCanvasHandle>(null);
+  const authStatus = useAuthStore(s => s.status);
+  const initializeAuth = useAuthStore(s => s.initialize);
+
+  // 启动时尝试用缓存 token 恢复会话
+  useEffect(() => {
+    initializeAuth();
+  }, [initializeAuth]);
+
+  // 加载中：显示启动屏
+  if (authStatus === 'loading') {
+    return (
+      <div
+        className="w-screen h-screen flex items-center justify-center"
+        style={{ background: '#0A0814' }}
+      >
+        <div
+          style={{
+            fontFamily: '"Rajdhani", "Orbitron", monospace',
+            color: '#B026FF',
+            fontSize: '14px',
+            letterSpacing: '4px',
+            textShadow: '0 0 12px rgba(176, 38, 255, 0.7)',
+          }}
+        >
+          系统初始化中...
+        </div>
+      </div>
+    );
+  }
+
+  // 未登录：显示登录/注册界面
+  if (authStatus === 'unauthenticated') {
+    return <AuthPanel />;
+  }
+
+  return <GameApp />;
+}
+
+function GameApp() {
+  const gameCanvasRef = useRef<GameCanvasHandle>(null);
+  const profile = useAuthStore(s => s.profile);
+  const player = useGameStore(s => s.player);
   const [view, setView] = useState<View>('menu');
   const [shopOpen, setShopOpen] = useState(false);
   const [showEquipStats, setShowEquipStats] = useState(false);
@@ -82,6 +133,15 @@ function App() {
   const [menuModalOpen, setMenuModalOpen] = useState(false);
   // 日常挑战：点击主界面时弹出的结算确认
   const [dailySettleConfirm, setDailySettleConfirm] = useState(false);
+  // 聊天弹窗
+  const [chatModalOpen, setChatModalOpen] = useState(false);
+  // 按钮栏更多菜单（重开/主界面/设置）
+  const [barMenuOpen, setBarMenuOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const moreBtnRef = useRef<HTMLButtonElement>(null);
+  const [moreMenuPos, setMoreMenuPos] = useState<{ left: number; bottom: number } | null>(null);
+  // PK 挑战：选中的对手（非空时进入 PK 战斗场景）
+  const [pkOpponent, setPkOpponent] = useState<OnlinePlayer | null>(null);
 
   // 订阅游戏结束状态：用于在炼狱模式胜利时显示结算界面（替代普通GameOverModal）
   const isGameOver = useGameStore(s => s.gameState?.isGameOver ?? false);
@@ -487,7 +547,7 @@ function App() {
               <text x="64" y="10" fontSize="3" fill="#00FF9D" fontFamily="monospace">ONLINE</text>
 
               <circle cx="335" cy="8" r="1" fill="#FFD700" />
-              <text x="339" y="10" fontSize="3" fill="#FFD700" fontFamily="monospace">v2.4.7</text>
+              <text x="339" y="10" fontSize="3" fill="#FFD700" fontFamily="monospace">v2.5.1</text>
             </g>
           </svg>
 
@@ -504,28 +564,226 @@ function App() {
                 <QuickBars engineRef={engineRef as any} />
               </div>
             )}
-            {/* 按钮区：50px，圆形立体按钮，靠右对齐，左右边距-10px */}
+            {/* 按钮区：50px，左=聊天框，右=圆形立体按钮 */}
             <div
-              className="flex items-end justify-end gap-1"
+              className="flex items-center"
               style={{
                 height: BTN_PANEL_HEIGHT,
-                padding: '2px 10px 0px 0px',
+                padding: '2px 10px 0px 10px',
+                gap: '4px',
               }}
             >
-              {buttons.filter(btn => view !== 'menu' || (btn.id !== 'restart' && btn.id !== 'home')).map((btn) => {
-                const panelId = BUTTON_PANEL_MAP[btn.id];
-                const active = panelId != null && activePanel === panelId;
-                return (
-                  <PixelButton
-                    key={btn.id}
-                    iconElement={btn.iconElement}
-                    label={btn.label}
-                    active={active}
-                    onClick={btn.action}
-                    badge={btn.badge}
-                  />
-                );
-              })}
+              {/* 左侧聊天框：垂直居中靠左摆放 */}
+              <div className="flex items-center" style={{ flexShrink: 1, minWidth: '30px' }}>
+                <ChatBox onOpenModal={() => setChatModalOpen(true)} inlineInPanel />
+              </div>
+              {/* 右侧功能按钮：靠右对齐，窄屏可横向滚动 */}
+              <div
+                className="flex items-end gap-1 bottom-btn-scroll"
+                style={{ flex: 1, minWidth: 0, overflowX: 'auto', justifyContent: 'flex-end' }}
+              >
+                {buttons.filter(btn => btn.id !== 'restart' && btn.id !== 'home' && btn.id !== 'achievement').map((btn) => {
+                  const panelId = BUTTON_PANEL_MAP[btn.id];
+                  const active = panelId != null && activePanel === panelId;
+                  return (
+                    <PixelButton
+                      key={btn.id}
+                      iconElement={btn.iconElement}
+                      label={btn.label}
+                      active={active}
+                      onClick={btn.action}
+                      badge={btn.badge}
+                    />
+                  );
+                })}
+              </div>
+              {/* 更多按钮：独立固定在最右侧，确保始终可见（不受其他按钮宽度影响） */}
+              <div style={{ position: 'relative', flexShrink: 0 }}>
+                {/* 更多按钮：重开/主界面/设置 */}
+                <button
+                  ref={moreBtnRef}
+                  onClick={() => {
+                    const rect = moreBtnRef.current?.getBoundingClientRect();
+                    if (rect) {
+                      setMoreMenuPos({ left: rect.right - 110, bottom: window.innerHeight - rect.top + 4 });
+                    }
+                    setBarMenuOpen(v => !v);
+                  }}
+                  title="更多"
+                  style={{
+                    display: 'flex',
+                    flexDirection: 'column',
+                    alignItems: 'center',
+                    background: 'transparent',
+                    border: 'none',
+                    cursor: 'pointer',
+                    padding: '2px 0',
+                    gap: '0px',
+                    flexShrink: 0,
+                  }}
+                >
+                  <div
+                    style={{
+                      width: '30px',
+                      height: '30px',
+                      borderRadius: '50%',
+                      background: barMenuOpen ? 'rgba(176, 38, 255, 0.25)' : 'rgba(100, 100, 130, 0.15)',
+                      border: `1px solid ${barMenuOpen ? '#B026FF' : 'rgba(150,150,180,0.5)'}`,
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      transition: 'all 0.15s ease',
+                    }}
+                  >
+                    <span style={{ fontSize: '14px', color: barMenuOpen ? '#B026FF' : '#C0C0D0', lineHeight: 1 }}>⋮</span>
+                  </div>
+                  <span style={{
+                    fontSize: '7px',
+                    color: '#C0C0D0',
+                    fontFamily: '"Rajdhani", "Orbitron", monospace',
+                    marginTop: '1px',
+                    lineHeight: 1,
+                    whiteSpace: 'nowrap',
+                  }}>更多</span>
+                </button>
+                {/* 下拉菜单：用 Portal 渲染到 body，避免被父级 stacking context 裁剪 */}
+                {barMenuOpen && moreMenuPos && createPortal(
+                  <>
+                    <div
+                      className="fixed inset-0"
+                      style={{ zIndex: 998 }}
+                      onClick={() => setBarMenuOpen(false)}
+                    />
+                    <div
+                      style={{
+                        position: 'fixed',
+                        left: moreMenuPos.left,
+                        bottom: moreMenuPos.bottom,
+                        background: 'rgba(19, 16, 37, 0.95)',
+                        border: '1px solid rgba(176, 38, 255, 0.5)',
+                        borderRadius: '8px',
+                        padding: '6px',
+                        minWidth: '100px',
+                        zIndex: 999,
+                        boxShadow: '0 4px 16px rgba(0,0,0,0.5)',
+                      }}
+                    >
+                      {/* 成就：主界面和战斗界面都显示 */}
+                      {( () => {
+                        const achBtn = buttons.find(b => b.id === 'achievement');
+                        if (!achBtn) return null;
+                        return (
+                          <button
+                            onClick={() => { setBarMenuOpen(false); achBtn.action(); }}
+                            style={{
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: '8px',
+                              width: '100%',
+                              padding: '6px 8px',
+                              background: 'transparent',
+                              border: 'none',
+                              color: '#E0E0F0',
+                              fontSize: '10px',
+                              fontFamily: '"Rajdhani", "Orbitron", monospace',
+                              cursor: 'pointer',
+                              borderRadius: '4px',
+                              textAlign: 'left',
+                              position: 'relative',
+                            }}
+                            onMouseEnter={(e) => { e.currentTarget.style.background = 'rgba(176, 38, 255, 0.2)'; }}
+                            onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
+                          >
+                            <img src="/images/btn-achievement.png" alt="成就" style={{ width: '16px', height: '16px', objectFit: 'contain' }} />
+                            成就
+                            {achBtn.badge !== undefined && achBtn.badge > 0 && (
+                              <span
+                                style={{
+                                  position: 'absolute',
+                                  top: '4px',
+                                  right: '6px',
+                                  minWidth: '14px',
+                                  height: '14px',
+                                  padding: '0 3px',
+                                  borderRadius: '7px',
+                                  background: 'linear-gradient(180deg, #FF6B6B 0%, #FF2D55 100%)',
+                                  color: '#FFFFFF',
+                                  fontSize: '8px',
+                                  fontWeight: 700,
+                                  fontFamily: '"Rajdhani", monospace',
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  justifyContent: 'center',
+                                  border: '1px solid rgba(0,0,0,0.3)',
+                                  boxShadow: '0 1px 3px rgba(255,45,85,0.5)',
+                                  lineHeight: 1,
+                                }}
+                              >
+                                {achBtn.badge > 99 ? '99+' : achBtn.badge}
+                              </span>
+                            )}
+                          </button>
+                        );
+                      })()}
+                      {view !== 'menu' && buttons.filter(btn => btn.id === 'restart' || btn.id === 'home').map(btn => (
+                        <button
+                          key={btn.id}
+                          onClick={() => { setBarMenuOpen(false); btn.action(); }}
+                          style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '8px',
+                            width: '100%',
+                            padding: '6px 8px',
+                            background: 'transparent',
+                            border: 'none',
+                            color: '#E0E0F0',
+                            fontSize: '10px',
+                            fontFamily: '"Rajdhani", "Orbitron", monospace',
+                            cursor: 'pointer',
+                            borderRadius: '4px',
+                            textAlign: 'left',
+                          }}
+                          onMouseEnter={(e) => { e.currentTarget.style.background = 'rgba(176, 38, 255, 0.2)'; }}
+                          onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
+                        >
+                          <span style={{ fontSize: '14px' }}>
+                            {btn.id === 'restart' ? '🔄' : '🏠'}
+                          </span>
+                          {btn.label}
+                        </button>
+                      ))}
+                      {/* 设置：仅主界面显示 */}
+                      {view === 'menu' && (
+                        <button
+                          onClick={() => { setBarMenuOpen(false); setSettingsOpen(true); }}
+                          style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '8px',
+                            width: '100%',
+                            padding: '6px 8px',
+                            background: 'transparent',
+                            border: 'none',
+                            color: '#E0E0F0',
+                            fontSize: '10px',
+                            fontFamily: '"Rajdhani", "Orbitron", monospace',
+                            cursor: 'pointer',
+                            borderRadius: '4px',
+                            textAlign: 'left',
+                          }}
+                          onMouseEnter={(e) => { e.currentTarget.style.background = 'rgba(176, 38, 255, 0.2)'; }}
+                          onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
+                        >
+                          <img src="/images/btn-settings.png" alt="设置" style={{ width: '16px', height: '16px', objectFit: 'contain' }} />
+                          设置
+                        </button>
+                      )}
+                    </div>
+                  </>,
+                  document.body
+                )}
+              </div>
             </div>
 
             {/* 最底部占位框：30px */}
@@ -1046,7 +1304,7 @@ function App() {
 
         {/* 主界面：覆盖上方区域，底部留出按钮区+占位框空间 */}
         {view === 'menu' && (
-          <MainMenu onEnterStage={handleEnterStage} engineRef={engineRef} bottomInset={BTN_PANEL_HEIGHT + BOTTOM_FOOTER_HEIGHT} onModalOpenChange={setMenuModalOpen} />
+          <MainMenu onEnterStage={handleEnterStage} engineRef={engineRef} bottomInset={BTN_PANEL_HEIGHT + BOTTOM_FOOTER_HEIGHT} onModalOpenChange={setMenuModalOpen} onStartPk={(opp) => setPkOpponent(opp)} />
         )}
 
         {/* 主界面状态栏：仅显示等级/战斗力/血量/经验条，位于主界面之上 */}
@@ -1056,6 +1314,65 @@ function App() {
 
         {/* 游戏内悬浮提示：道具使用、升级等，跨视图显示 */}
         <GameToast />
+
+        {/* 聊天记录弹窗 */}
+        <ChatModal isOpen={chatModalOpen} onClose={() => setChatModalOpen(false)} />
+        {/* 设置弹窗 */}
+        <SettingsModal isOpen={settingsOpen} onClose={() => setSettingsOpen(false)} />
+
+        {/* PK 挑战战斗场景：选中对手后全屏覆盖 */}
+        {pkOpponent && profile && player && (() => {
+          const p = player as any;
+          // 口径说明：
+          //  - engine 内部 p.attackSpeed = 毫秒/次 → 转成 次/秒
+          //  - engine 内部 p.critRate / p.critDamage = 百分数（如 15 / 50） → 转成 0~1 小数 和 倍率（1.5）
+          const attackSpeedMs = Math.max(1, p.attackSpeed || 1000);
+          const critRatePct = (p.critRate as number | undefined) ?? 10;
+          const critDamagePct = (p.critDamage as number | undefined) ?? 50;
+          const elemBonus = (p.elementalDamageBonus as Record<string, number> | undefined) ?? {};
+          const myStats = {
+            attack:        p.attack || 10,
+            attackSpeed:   1000 / attackSpeedMs,
+            maxHealth:     p.maxHealth || 100,
+            critRate:      Math.max(0, Math.min(0.95, critRatePct / 100)),
+            critDamage:    Math.max(1, 1 + critDamagePct / 100),
+            defense:       p.defense || 0,
+            range:         p.range || 1,
+            physicalPenetration:  p.physicalPenetration || 0,
+            resistance:            p.resistance || 0,
+
+            fireDamageBonus:       elemBonus.fire      ?? p.fireDamageBonus      ?? 0,
+            iceDamageBonus:        elemBonus.ice       ?? p.iceDamageBonus       ?? 0,
+            lightningDamageBonus:  elemBonus.lightning ?? p.lightningDamageBonus ?? 0,
+            poisonDamageBonus:     elemBonus.poison    ?? p.poisonDamageBonus    ?? 0,
+
+            fireResistance:        p.fireResistance      ?? 0,
+            iceResistance:         p.iceResistance       ?? 0,
+            lightningResistance:   p.lightningResistance ?? 0,
+            poisonResistance:      p.poisonResistance    ?? 0,
+          };
+          const myProfile = {
+            id: profile.id,
+            displayName: profile.displayName,
+            level: profile.level,
+            power: profile.power,
+          };
+          return (
+            <PkBattleScene
+              opponent={pkOpponent}
+              myProfile={myProfile}
+              myStats={myStats}
+              onFinish={async (result) => {
+                const opp = pkOpponent;
+                setPkOpponent(null);
+                try {
+                  await pkApi.reportResult({ defenderId: opp.playerId, isWin: result.isWin, durationSeconds: result.durationSeconds });
+                } catch { /* 上报失败静默处理 */ }
+              }}
+              onClose={() => setPkOpponent(null)}
+            />
+          );
+        })()}
       </div>
     </div>
   );

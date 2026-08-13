@@ -122,13 +122,14 @@ public class AuthService : IAuthService
         // 签发令牌
         var token = _jwtService.GenerateAccessToken(newPlayer);
         var refresh = _jwtService.GenerateRefreshToken(newPlayer.Id);
+        var expiresMinutes = long.Parse(_config["Jwt:ExpiresMinutes"] ?? "120");
 
         _logger.LogInformation("玩家 {Username} 注册成功", request.Username);
         return new TokenOutput
         {
             AccessToken = token,
             RefreshToken = refresh,
-            ExpiresIn = 7200
+            ExpiresIn = expiresMinutes * 60
         };
     }
 
@@ -159,12 +160,13 @@ public class AuthService : IAuthService
 
         var newToken = _jwtService.GenerateAccessToken(player);
         var newRefresh = _jwtService.GenerateRefreshToken(player.Id);
+        var expiresMinutes = long.Parse(_config["Jwt:ExpiresMinutes"] ?? "120");
 
         return new TokenOutput
         {
             AccessToken = newToken,
             RefreshToken = newRefresh,
-            ExpiresIn = 7200
+            ExpiresIn = expiresMinutes * 60
         };
     }
 }

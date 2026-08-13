@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { EquipmentIcon } from './EquipmentIcon';
 import { ModalHudBackground } from './ModalHudBackground';
+import { EquipmentDetailModal } from './EquipmentDetailModal';
 import { RARITY_COLORS, RARITY_LABELS, SLOT_LABELS } from '../game/data/equipment';
 import type { Equipment, Blueprint, MerchantEquipment, EquipRarity } from '../game/types/game';
 import { neonCyan, neonPurple, neonPink, neonYellow, neonGreen, neonRed, neonOrange, neonText } from '../theme/colors';
@@ -29,6 +30,7 @@ export function EquipmentMerchantPanel({ engineRef, isOpen, onClose }: Equipment
   const [equipmentList, setEquipmentList] = useState<MerchantEquipment[]>([]);
   const [blueprintList, setBlueprintList] = useState<Blueprint[]>([]);
   const [toast, setToast] = useState<{ text: string; color: string } | null>(null);
+  const [detailEquip, setDetailEquip] = useState<MerchantEquipment | null>(null);
 
   const showToast = (text: string, color: string = neonPink) => {
     setToast({ text, color });
@@ -104,8 +106,7 @@ export function EquipmentMerchantPanel({ engineRef, isOpen, onClose }: Equipment
         style={{
           width: '100%',
           maxWidth: '340px',
-          height: '100%',
-          maxHeight: '92vh',
+          height: '440px',
           background: 'rgba(19, 16, 37, 0.95)',
           border: `1px solid ${neonPurple}40`,
           borderRadius: '14px',
@@ -200,6 +201,7 @@ export function EquipmentMerchantPanel({ engineRef, isOpen, onClose }: Equipment
                     item={item}
                     gold={gold}
                     onBuy={() => handleBuyEquipment(item.id, item.price)}
+                    onShowDetail={() => setDetailEquip(item)}
                   />
                 ))}
               </div>
@@ -249,6 +251,14 @@ export function EquipmentMerchantPanel({ engineRef, isOpen, onClose }: Equipment
         )}
       </div>
 
+      {/* 装备详情弹窗：点击装备图标查看 */}
+      {detailEquip && (
+        <EquipmentDetailModal
+          equipment={detailEquip.equipment}
+          onClose={() => setDetailEquip(null)}
+        />
+      )}
+
       <style>{`
         .merchant-scroll::-webkit-scrollbar { width: 3px; }
         .merchant-scroll::-webkit-scrollbar-track { background: rgba(100,100,130,0.1); }
@@ -259,17 +269,10 @@ export function EquipmentMerchantPanel({ engineRef, isOpen, onClose }: Equipment
 }
 
 // ===== 装备卡片 =====
-function EquipmentCard({ item, gold, onBuy }: { item: MerchantEquipment; gold: number; onBuy: () => void }) {
+function EquipmentCard({ item, gold, onBuy, onShowDetail }: { item: MerchantEquipment; gold: number; onBuy: () => void; onShowDetail: () => void }) {
   const eq = item.equipment;
   const color = RARITY_COLORS[eq.rarity];
   const canAfford = gold >= item.price;
-
-  // 属性摘要
-  const statParts: string[] = [];
-  if (eq.attack) statParts.push(`攻+${eq.attack}`);
-  if (eq.health) statParts.push(`血+${eq.health}`);
-  if (eq.defense) statParts.push(`防+${eq.defense}`);
-  if (eq.range) statParts.push(`程+${eq.range}`);
 
   return (
     <div
@@ -284,14 +287,15 @@ function EquipmentCard({ item, gold, onBuy }: { item: MerchantEquipment; gold: n
         gap: '2px',
       }}
     >
-      <div style={{ position: 'relative' }}>
+      <div
+        style={{ position: 'relative', cursor: 'pointer' }}
+        onClick={onShowDetail}
+        title="点击查看详情"
+      >
         <EquipmentIcon slot={eq.slot} rarity={eq.rarity} variant={eq.iconVariant} size={40} level={eq.level} />
       </div>
       <div style={{ ...neonText, fontSize: '6px', color: color, lineHeight: 1.1, textAlign: 'center' }}>
         {RARITY_LABELS[eq.rarity]}{SLOT_LABELS[eq.slot]}
-      </div>
-      <div style={{ ...neonText, fontSize: '6px', color: '#A0A0B8', lineHeight: 1.1, textAlign: 'center', minHeight: '12px' }}>
-        {statParts.join(' ')}
       </div>
       <div style={{ ...neonText, fontSize: '7px', color: neonYellow, fontWeight: 700 }}>🪙{item.price}</div>
       <button

@@ -26,14 +26,16 @@ public class PlayerRepository : Repository<Player>, IPlayerRepository
             .FirstOrDefaultAsync(u => u.Id == id && !u.IsDeleted);
     }
 
-    public async Task<IEnumerable<Player>> GetLeaderboardAsync(int top)
+    public async Task<IEnumerable<Player>> GetLeaderboardAsync(int top, string sortBy = "score")
     {
-        return await _dbSet
-            .Where(p => !p.IsDeleted)
-            .OrderByDescending(p => p.Score)
-            .ThenByDescending(p => p.MaxWave)
-            .Take(top)
-            .ToListAsync();
+        var query = _dbSet.Where(p => !p.IsDeleted);
+
+        // 统一排序：战斗力 > 积分 > 等级（从大到小）
+        query = query.OrderByDescending(p => p.Power)
+                     .ThenByDescending(p => p.Score)
+                     .ThenByDescending(p => p.Level);
+
+        return await query.Take(top).ToListAsync();
     }
 
     public async Task<bool> ExistsByUsernameAsync(string username)

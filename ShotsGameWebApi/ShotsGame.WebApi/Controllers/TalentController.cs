@@ -70,7 +70,7 @@ public class TalentController : AppControllerBase
     /// <param name="input">选择参数，包含目标天赋 ID</param>
     /// <returns>已选择的天赋详情 TalentOutput</returns>
     [HttpPost("choose")]
-    public async Task<IActionResult> ChooseTalentAsync(ChooseTalentInput input)
+    public async Task<IActionResult> ChooseTalentAsync([FromBody] ChooseTalentInput input)
     {
         var playerId = GetCurrentUserId();
         if (string.IsNullOrEmpty(playerId))

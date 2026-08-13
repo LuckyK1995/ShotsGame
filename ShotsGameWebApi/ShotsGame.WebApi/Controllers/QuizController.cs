@@ -49,7 +49,7 @@ public class QuizController : AppControllerBase
     /// <param name="input">答案参数，包含会话 ID、题目索引和玩家选项</param>
     /// <returns>本题结果 SubmitAnswerOutput（含是否正确、正确答案、累计得分）</returns>
     [HttpPost("submit-answer")]
-    public async Task<IActionResult> SubmitAnswerAsync(SubmitAnswerInput input)
+    public async Task<IActionResult> SubmitAnswerAsync([FromBody] SubmitAnswerInput input)
     {
         var playerId = GetCurrentUserId();
         if (string.IsNullOrEmpty(playerId))

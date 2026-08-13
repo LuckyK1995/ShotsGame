@@ -55,6 +55,11 @@ builder.Services.AddScoped<IGameModeService, GameModeService>();
 builder.Services.AddScoped<ICalculateService, CalculateService>();
 builder.Services.AddScoped<IEnhanceService, EnhanceService>();
 
+// ===== 聊天 / PK / 在线状态 扩展服务注册 =====
+builder.Services.AddSingleton<IOnlinePresenceService, OnlinePresenceService>();
+builder.Services.AddScoped<IChatService, ChatService>();
+builder.Services.AddScoped<IPkService, PkService>();
+
 // ===== AutoMapper 配置 =====
 builder.Services.AddAutoMapper(typeof(ShotsGame.Core.Mappings.PlayerProfile).Assembly);
 

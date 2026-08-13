@@ -100,7 +100,7 @@ public class EquipmentController : AppControllerBase
     /// <param name="input">装备参数，包含装备 ID 和目标装备槽位</param>
     /// <returns>穿戴后的装备详情 EquipmentOutput</returns>
     [HttpPost("equip")]
-    public async Task<IActionResult> EquipItemAsync(EquipItemInput input)
+    public async Task<IActionResult> EquipItemAsync([FromBody] EquipItemInput input)
     {
         var playerId = GetCurrentUserId();
         if (string.IsNullOrEmpty(playerId))
@@ -128,7 +128,7 @@ public class EquipmentController : AppControllerBase
     /// <param name="input">卸下装备参数，包含装备 ID 和装备槽位</param>
     /// <returns>卸下后的装备详情 EquipmentOutput</returns>
     [HttpPost("unequip")]
-    public async Task<IActionResult> UnequipItemAsync(UnequipItemInput input)
+    public async Task<IActionResult> UnequipItemAsync([FromBody] UnequipItemInput input)
     {
         var playerId = GetCurrentUserId();
         if (string.IsNullOrEmpty(playerId))
@@ -156,7 +156,7 @@ public class EquipmentController : AppControllerBase
     /// <param name="input">生成参数，包含装备槽位、稀有度、等级等条件</param>
     /// <returns>新生成的装备详情 EquipmentOutput</returns>
     [HttpPost("generate")]
-    public async Task<IActionResult> GenerateEquipmentAsync(GenerateEquipmentInput input)
+    public async Task<IActionResult> GenerateEquipmentAsync([FromBody] GenerateEquipmentInput input)
     {
         var playerId = GetCurrentUserId();
         if (string.IsNullOrEmpty(playerId))
@@ -184,7 +184,7 @@ public class EquipmentController : AppControllerBase
     /// <param name="input">强化参数，包含装备 ID 和强化模式（普通/保底等）</param>
     /// <returns>强化结果 EnhanceResultOutput（含是否成功、强化前后等级、消耗材料等）</returns>
     [HttpPost("enhance")]
-    public async Task<IActionResult> EnhanceEquipmentAsync(EnhanceEquipmentInput input)
+    public async Task<IActionResult> EnhanceEquipmentAsync([FromBody] EnhanceEquipmentInput input)
     {
         var playerId = GetCurrentUserId();
         if (string.IsNullOrEmpty(playerId))
@@ -212,7 +212,7 @@ public class EquipmentController : AppControllerBase
     /// <param name="input">附魔参数，包含装备 ID 和附魔物品 ID</param>
     /// <returns>附魔结果 EnchantResultOutput（含新附魔属性及消耗信息）</returns>
     [HttpPost("enchant")]
-    public async Task<IActionResult> EnchantEquipmentAsync(EnchantEquipmentInput input)
+    public async Task<IActionResult> EnchantEquipmentAsync([FromBody] EnchantEquipmentInput input)
     {
         var playerId = GetCurrentUserId();
         if (string.IsNullOrEmpty(playerId))
@@ -240,7 +240,7 @@ public class EquipmentController : AppControllerBase
     /// <param name="input">宝石镶嵌参数，包含装备 ID、宝石物品 ID 与目标孔位</param>
     /// <returns>镶嵌结果 GemSocketResultOutput（含是否成功及镶嵌后装备属性）</returns>
     [HttpPost("socket-gem")]
-    public async Task<IActionResult> SocketGemAsync(SocketGemInput input)
+    public async Task<IActionResult> SocketGemAsync([FromBody] SocketGemInput input)
     {
         var playerId = GetCurrentUserId();
         if (string.IsNullOrEmpty(playerId))
@@ -268,7 +268,7 @@ public class EquipmentController : AppControllerBase
     /// <param name="input">分解参数，包含待分解装备 ID 列表</param>
     /// <returns>分解结果 SellItemsOutput（含获得金币、材料等收益）</returns>
     [HttpPost("decompose")]
-    public async Task<IActionResult> DecomposeEquipmentAsync(DecomposeEquipmentInput input)
+    public async Task<IActionResult> DecomposeEquipmentAsync([FromBody] DecomposeEquipmentInput input)
     {
         var playerId = GetCurrentUserId();
         if (string.IsNullOrEmpty(playerId))
@@ -296,7 +296,7 @@ public class EquipmentController : AppControllerBase
     /// <param name="input">强化转移参数，包含源装备 ID 和目标装备 ID</param>
     /// <returns>转移结果 EnhanceResultOutput（含转移后装备强化等级）</returns>
     [HttpPost("transfer-enhance")]
-    public async Task<IActionResult> TransferEnhanceAsync(TransferEnhanceInput input)
+    public async Task<IActionResult> TransferEnhanceAsync([FromBody] TransferEnhanceInput input)
     {
         var playerId = GetCurrentUserId();
         if (string.IsNullOrEmpty(playerId))

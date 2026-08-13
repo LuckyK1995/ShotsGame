@@ -28,7 +28,10 @@ public static class DbInitializer
             PasswordHash = passwordService.HashPassword("123456"),
             Level = 1,
             Gold = 1000,
-            Score = 0
+            Score = 0,
+            // 扩展功能测试数据：战斗力与关卡
+            Power = 1500,
+            MaxStage = 3
         };
 
         await context.Players.AddAsync(testPlayer);

@@ -50,7 +50,7 @@ public class ShopController : AppControllerBase
     /// <param name="input">购买参数，包含商店商品 ID 与购买数量</param>
     /// <returns>购买结果 ShopItemOutput（含购买后商品与扣减货币）</returns>
     [HttpPost("buy")]
-    public async Task<IActionResult> BuyItemAsync(BuyShopItemInput input)
+    public async Task<IActionResult> BuyItemAsync([FromBody] BuyShopItemInput input)
     {
         var playerId = GetCurrentUserId();
         if (string.IsNullOrEmpty(playerId))

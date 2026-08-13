@@ -6,7 +6,7 @@ using ShotsGame.WebApi.Services.Interfaces;
 namespace ShotsGame.WebApi.Controllers;
 
 /// <summary>
-/// 玩家控制器：负责玩家个人档案查询与更新、全局排行榜数据获取
+/// 玩家控制器：负责玩家个人档案查询与更新、全局排行榜数据获取、玩家统计上报
 /// </summary>
 [ApiController]
 [Route("api/player")]
@@ -14,16 +14,18 @@ namespace ShotsGame.WebApi.Controllers;
 public class PlayerController : AppControllerBase
 {
     private readonly IPlayerService _playerService;
+    private readonly IOnlinePresenceService _onlinePresenceService;
 
-    public PlayerController(IPlayerService playerService)
+    public PlayerController(IPlayerService playerService, IOnlinePresenceService onlinePresenceService)
     {
         _playerService = playerService;
+        _onlinePresenceService = onlinePresenceService;
     }
 
     /// <summary>
     /// 获取当前登录玩家的完整个人档案信息
     /// </summary>
-    /// <returns>玩家档案 PlayerProfileOutput（含昵称、头像、等级、经验、金币、钻石等）</returns>
+    /// <returns>玩家档案 PlayerProfileOutput（含昵称、头像、等级、经验、金币、PK统计等）</returns>
     [HttpGet("profile")]
     public async Task<IActionResult> GetProfile()
     {
@@ -32,6 +34,9 @@ public class PlayerController : AppControllerBase
         {
             return UnauthorizedFail<PlayerProfileOutput>();
         }
+
+        // 当前玩家标记在线
+        _onlinePresenceService.MarkOnline(playerId);
 
         var profile = await _playerService.GetProfileAsync(playerId);
         if (profile == null)
@@ -48,7 +53,7 @@ public class PlayerController : AppControllerBase
     /// <param name="input">玩家更新参数，包含新昵称和新头像</param>
     /// <returns>更新后的玩家档案 PlayerProfileOutput</returns>
     [HttpPut("profile")]
-    public async Task<IActionResult> UpdateProfile(UpdatePlayerInput input)
+    public async Task<IActionResult> UpdateProfile([FromBody] UpdatePlayerInput input)
     {
         var playerId = GetCurrentUserId();
         if (string.IsNullOrEmpty(playerId))
@@ -66,15 +71,39 @@ public class PlayerController : AppControllerBase
     }
 
     /// <summary>
-    /// 获取全局战力排行榜
+    /// 获取全局排行榜（按指定字段降序）
     /// </summary>
+    /// <param name="sortBy">排序字段：power=战斗力（默认）、level=等级、score=积分</param>
     /// <param name="top">返回前 N 名玩家，默认 50，最大 100</param>
-    /// <returns>排行榜玩家列表，包含排名、玩家昵称、战力等信息</returns>
+    /// <returns>排行榜玩家列表，包含排名、玩家昵称、战斗力、PK胜率、在线状态等</returns>
     [HttpGet("leaderboard")]
     [AllowAnonymous]
-    public async Task<IActionResult> GetLeaderboard([FromQuery] int top = 50)
+    public async Task<IActionResult> GetLeaderboard([FromQuery] string sortBy = "power", [FromQuery] int top = 50)
     {
-        var list = await _playerService.GetLeaderboardAsync(top);
+        var list = await _playerService.GetLeaderboardAsync(top, sortBy);
         return Success(list, "获取成功");
+    }
+
+    /// <summary>
+    /// 上报玩家统计信息（客户端上报战斗力、当前关卡最大关卡）
+    /// </summary>
+    /// <param name="input">统计参数（Power/MaxStage，可选）</param>
+    /// <returns>更新后的玩家档案 PlayerProfileOutput</returns>
+    [HttpPut("stats")]
+    public async Task<IActionResult> UpdateStats([FromBody] UpdatePlayerStatsInput input)
+    {
+        var playerId = GetCurrentUserId();
+        if (string.IsNullOrEmpty(playerId))
+        {
+            return UnauthorizedFail<PlayerProfileOutput>();
+        }
+
+        var profile = await _playerService.UpdateStatsAsync(playerId, input);
+        if (profile == null)
+        {
+            return NotFoundFail<PlayerProfileOutput>("玩家不存在");
+        }
+
+        return Success(profile, "更新成功");
     }
 }

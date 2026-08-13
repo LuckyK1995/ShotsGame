@@ -68,6 +68,17 @@ public class Player : BaseEntity
     /// </summary>
     public int TotalVictories { get; set; } = 0;
 
+    /// <summary>PK胜场</summary>
+    public int PkWins { get; set; } = 0;
+    /// <summary>PK负场</summary>
+    public int PkLosses { get; set; } = 0;
+    /// <summary>PK总场次</summary>
+    public int PkTotal { get; set; } = 0;
+    /// <summary>战斗力（客户端上报缓存值，用于排行榜）</summary>
+    public long Power { get; set; } = 0;
+    /// <summary>当前关卡挑战最大关卡</summary>
+    public int MaxStage { get; set; } = 0;
+
     /// <summary>
     /// 上次活跃时间
     /// </summary>

@@ -12,6 +12,13 @@ export default defineConfig(({ command }) => ({
     strictPort: true, // 锁死 5173 端口，被占用时报错而不跳转其他端口
     open: true, // 启动时自动打开浏览器
     allowedHosts: true, // 允许所有 host（仅本地+局域网用，关闭隧道访问）
+    proxy: {
+      // 代理 /api 到后端 ASP.NET Core WebAPI，避免开发环境 CORS 问题
+      '/api': {
+        target: 'http://localhost:5174',
+        changeOrigin: true,
+      },
+    },
   },
   build: {
     sourcemap: 'hidden',

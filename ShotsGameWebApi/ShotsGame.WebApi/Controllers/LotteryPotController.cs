@@ -49,7 +49,7 @@ public class LotteryPotController : AppControllerBase
     /// <param name="input">使用参数，包含开启抽奖罐的数量</param>
     /// <returns>使用结果 UseLotteryPotOutput（含获得的全部奖励物品）</returns>
     [HttpPost("use")]
-    public async Task<IActionResult> UsePotAsync(UseLotteryPotInput input)
+    public async Task<IActionResult> UsePotAsync([FromBody] UseLotteryPotInput input)
     {
         var playerId = GetCurrentUserId();
         if (string.IsNullOrEmpty(playerId))

@@ -49,7 +49,7 @@ public class GameModeController : AppControllerBase
     /// <param name="input">开始游戏参数，包含目标游戏模式及难度等</param>
     /// <returns>对局开始结果 StartGameOutput（含对局 ID、初始配置等）</returns>
     [HttpPost("start")]
-    public async Task<IActionResult> StartGameAsync(GameModeNs.StartGameInput input)
+    public async Task<IActionResult> StartGameAsync([FromBody] GameModeNs.StartGameInput input)
     {
         var playerId = GetCurrentUserId();
         if (string.IsNullOrEmpty(playerId))

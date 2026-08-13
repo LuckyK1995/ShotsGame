@@ -49,7 +49,7 @@ public class CodexController : AppControllerBase
     /// <param name="input">图鉴更新参数，包含条目类型、条目 ID 与解锁进度</param>
     /// <returns>更新后图鉴条目详情 CodexEntryOutput</returns>
     [HttpPost("update")]
-    public async Task<IActionResult> UpdateEntryAsync(UpdateCodexInput input)
+    public async Task<IActionResult> UpdateEntryAsync([FromBody] UpdateCodexInput input)
     {
         var playerId = GetCurrentUserId();
         if (string.IsNullOrEmpty(playerId))

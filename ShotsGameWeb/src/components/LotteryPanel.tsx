@@ -14,9 +14,9 @@ interface EngineRef {
       tournamentBest: number;
       history: number[];
     };
-    setLotteryBet: (categoryId: string, delta: number) => { success: boolean; bets: Record<string, number>; coins: number; msg?: string };
-    clearLotteryBets: () => { coins: number };
-    spinLottery: () => {
+    setLotteryBet: (categoryId: string, delta: number) => Promise<{ success: boolean; bets: Record<string, number>; coins: number; msg?: string }>;
+    clearLotteryBets: () => Promise<{ coins: number }>;
+    spinLottery: () => Promise<{
       success: boolean;
       stopCell: number;
       winningCells: number[];
@@ -33,7 +33,8 @@ interface EngineRef {
       luckyTrainStop?: number;
       trainLength?: number;
       msg?: string;
-    };
+    }>;
+    refreshLotteryFromServer?: () => Promise<void>;
   } | null;
 }
 
@@ -144,11 +145,17 @@ export function LotteryPanel({ engineRef, isOpen, onClose }: LotteryPanelProps) 
 
   useEffect(() => {
     if (isOpen) {
-      // 打开面板时自动清空上次残留的押注，避免存档恢复导致自动押注
-      if (engineRef.current) {
-        engineRef.current.clearLotteryBets();
-      }
-      refreshStatus();
+      // 先从服务端刷新抽奖状态，然后清空残留押注并刷新本地显示
+      void engineRef.current?.refreshLotteryFromServer?.().then(async () => {
+        if (engineRef.current) {
+          try {
+            await engineRef.current.clearLotteryBets();
+          } catch (e) {
+            // 清空失败：忽略
+          }
+        }
+        refreshStatus();
+      });
     }
   }, [isOpen, refreshStatus, engineRef]);
 
@@ -172,21 +179,29 @@ export function LotteryPanel({ engineRef, isOpen, onClose }: LotteryPanelProps) 
   const totalBet = status ? Object.values(status.bets).reduce((s, b) => s + b, 0) : 0;
 
   // 押注操作（按水果种类；通过 -/+ 按钮调整）
-  const handleBet = (categoryId: string, delta: number) => {
+  const handleBet = async (categoryId: string, delta: number) => {
     if (spinning) return;
     if (!engineRef.current) return;
-    const res = engineRef.current.setLotteryBet(categoryId, delta);
-    if (!res.success && res.msg) {
-      showToast(res.msg, neonRed);
+    try {
+      const res = await engineRef.current.setLotteryBet(categoryId, delta);
+      if (!res.success && res.msg) {
+        showToast(res.msg, neonRed);
+      }
+    } catch (e) {
+      showToast('押注失败', neonRed);
     }
     refreshStatus();
   };
 
   // 清空押注
-  const handleClearBets = () => {
+  const handleClearBets = async () => {
     if (spinning) return;
     if (!engineRef.current) return;
-    engineRef.current.clearLotteryBets();
+    try {
+      await engineRef.current.clearLotteryBets();
+    } catch (e) {
+      // 清空失败：忽略
+    }
     refreshStatus();
   };
 
@@ -208,164 +223,114 @@ export function LotteryPanel({ engineRef, isOpen, onClose }: LotteryPanelProps) 
     setTrainLen(0);
     setLuckyFxPhase(false);
 
-    // 先获取最终结果
-    const result = engineRef.current.spinLottery();
-    if (!result.success) {
-      showToast(result.msg || '无法旋转', neonRed);
-      setSpinning(false);
-      refreshStatus();
-      return;
-    }
+    // 立即启动跑马灯空转动画，等待服务端 spin 结果返回后停在 finalCell
+    type SpinResult = Awaited<ReturnType<NonNullable<EngineRef['current']>['spinLottery']>>;
+    // resultRef：缓存 spinLottery() 返回的结果（在 .then 中赋值）
+    // finishSpin 通过此 ref 读取 result 来执行后续动画
+    const resultRef: { value: SpinResult | null } = { value: null };
+    // spinEndedRef：标记跑马灯减速动画是否已结束（用于 result 已就绪时直接停在 finalCell）
+    const spinEndedRef: { value: boolean } = { value: false };
 
-    refreshStatus();
-
-    // 跑马灯动画：先快速跑动，再逐步减速，最终停在 stopCell
-    const finalCell = result.stopCell;
+    const TARGET_TOTAL = 600; // 总时长 ~0.6s
     let currentCell = 0;
-    let speed = 50; // 初始速度 50ms
+    let speed = 50;
     let totalElapsed = 0;
-    const TARGET_TOTAL = 600; // 总时长 ~0.6s（缩短2秒）
-
     setLitCell(currentCell);
 
-    const runStep = () => {
-      currentCell = (currentCell + 1) % CELL_COUNT;
-      setLitCell(currentCell);
-      // 减速：速度随时间增加
-      totalElapsed += speed;
-      const progress = totalElapsed / TARGET_TOTAL;
-      speed = Math.floor(50 + progress * progress * 240); // 50ms → 290ms
-      if (totalElapsed >= TARGET_TOTAL) {
-        // 即将停止：确保停在 finalCell
-        if (currentCell === finalCell) {
-          finishSpin();
-        } else {
-          // 继续跑到 finalCell
-          const remain = (finalCell - currentCell + CELL_COUNT) % CELL_COUNT;
-          let stepCount = 0;
-          const finishTimer = setInterval(() => {
-            currentCell = (currentCell + 1) % CELL_COUNT;
-            setLitCell(currentCell);
-            stepCount++;
-            if (currentCell === finalCell && stepCount >= remain) {
-              clearInterval(finishTimer);
-              finishSpin();
-            }
-          }, 200);
-          spinTimerRef.current = finishTimer as any;
-        }
-        return;
-      }
-      stopTimerRef.current = setTimeout(runStep, speed);
-    };
-    stopTimerRef.current = setTimeout(runStep, speed);
-
-    // 展示最终结果
-    const showResult = () => {
-      setWinningCells(result.winningCells);
-      setWinningCategory(result.winningCategory);
-      setLastResult({
-        win: result.win,
-        rewardItems: result.rewardItems,
-        special: result.special,
-        specialLabel: result.specialLabel,
-        luckyKind: result.luckyKind,
-        freeSpin: result.freeSpin,
-        jackpot: result.jackpot,
-        luckyTrainStart: result.luckyTrainStart,
-        luckyTrainStop: result.luckyTrainStop,
-        trainLength: result.trainLength,
-      });
-      setSpinning(false);
-      setLuckyFxPhase(false);
-      refreshStatus();
-      if (result.rewardItems.length > 0) {
-        const itemText = result.rewardItems.map(r => `${r.icon}${r.itemName}×${r.count}`).join(' ');
-        const label = result.specialLabel ? `🎉 ${result.specialLabel} 🎉 ${itemText}` : `中奖 ${itemText}`;
-        showToast(label, result.special ? (SPECIAL_INFO[result.special]?.color || neonYellow) : neonYellow);
-      } else if (result.freeSpin) {
-        showToast('🎉 送灯！免费旋转1次', neonCyan);
-      }
-    };
-
-    // Lucky 开火车动画：从 Lucky 格子开始顺时针跑，车头带动车尾长度连续高亮
-    const startTrainAnimation = (trainStart: number, trainStop: number, length: number) => {
-      let tc = trainStart;
-      const safeLen = Math.min(Math.max(length, 2), CELL_COUNT);
-      setTrainLen(safeLen);
-      setTrainCell(tc);
-      let trainSpeed = 45;
-      let trainElapsed = 0;
-      // 开火车总时长随机：3.0~6.0秒
-      const TRAIN_TOTAL = 3000 + Math.floor(Math.random() * 3000);
-
-      const runTrain = () => {
-        tc = (tc + 1) % CELL_COUNT;
-        setTrainCell(tc);
-        trainElapsed += trainSpeed;
-        const progress = Math.min(trainElapsed / TRAIN_TOTAL, 1);
-        // 速度曲线：前段匀速，后段指数级减速
-        if (progress < 0.55) {
-          trainSpeed = 45;
-        } else {
-          const p = (progress - 0.55) / 0.45;
-          trainSpeed = Math.floor(45 + p * p * 260); // 45ms → 305ms
-        }
-        if (trainElapsed >= TRAIN_TOTAL) {
-          if (tc === trainStop) {
-            finishTrain();
-          } else {
-            const remain = (trainStop - tc + CELL_COUNT) % CELL_COUNT;
-            let stepCount = 0;
-            const finishTimer = setInterval(() => {
-              tc = (tc + 1) % CELL_COUNT;
-              setTrainCell(tc);
-              stepCount++;
-              if (tc === trainStop && stepCount >= remain) {
-                clearInterval(finishTimer);
-                spinTimerRef.current = null;
-                finishTrain();
-              }
-            }, 220);
-            spinTimerRef.current = finishTimer as any;
-          }
-          return;
-        }
-        stopTimerRef.current = setTimeout(runTrain, trainSpeed);
-      };
-      stopTimerRef.current = setTimeout(runTrain, trainSpeed);
-    };
-
-    const finishTrain = () => {
-      setTrainCell(-1);
-      setTrainLen(0);
-      setStopCell(result.luckyTrainStop!);
-      showResult();
-    };
-
-    // 跑马灯停在 Lucky 格子 → 播放 2 秒 Lucky 命中特效 → 进入子流程
-    const afterLuckyFx = () => {
-      setLuckyFxPhase(false);
-      if (result.luckyTrainStart !== undefined && result.luckyTrainStop !== undefined) {
-        startTrainAnimation(result.luckyTrainStart, result.luckyTrainStop, result.trainLength || 8);
-      } else {
-        // 非开火车子玩法：特效后直接展示中奖结果
-        showResult();
-      }
-    };
-
-    const finishSpin = () => {
-      if (spinTimerRef.current) {
-        clearInterval(spinTimerRef.current);
-        spinTimerRef.current = null;
-      }
-      setLitCell(-1);
-      setStopCell(finalCell);
-
+    // 跑马灯停下后的特效与展示逻辑
+    const runPostStopAnimation = (result: SpinResult, finalCell: number) => {
       const finalItem = ITEMS[finalCell];
       const isLuckyFinal = finalItem.size === 'special' && (finalItem.key === 'lucky_1' || finalItem.key === 'lucky_2');
+
+      const showResult = () => {
+        setWinningCells(result.winningCells);
+        setWinningCategory(result.winningCategory);
+        setLastResult({
+          win: result.win,
+          rewardItems: result.rewardItems,
+          special: result.special,
+          specialLabel: result.specialLabel,
+          luckyKind: result.luckyKind,
+          freeSpin: result.freeSpin,
+          jackpot: result.jackpot,
+          luckyTrainStart: result.luckyTrainStart,
+          luckyTrainStop: result.luckyTrainStop,
+          trainLength: result.trainLength,
+        });
+        setSpinning(false);
+        setLuckyFxPhase(false);
+        refreshStatus();
+        if (result.rewardItems.length > 0) {
+          const itemText = result.rewardItems.map(r => `${r.icon}${r.itemName}×${r.count}`).join(' ');
+          const label = result.specialLabel ? `🎉 ${result.specialLabel} 🎉 ${itemText}` : `中奖 ${itemText}`;
+          showToast(label, result.special ? (SPECIAL_INFO[result.special]?.color || neonYellow) : neonYellow);
+        } else if (result.freeSpin) {
+          showToast('🎉 送灯！免费旋转1次', neonCyan);
+        }
+      };
+
+      const finishTrain = () => {
+        setTrainCell(-1);
+        setTrainLen(0);
+        setStopCell(result.luckyTrainStop!);
+        showResult();
+      };
+
+      const startTrainAnimation = (trainStart: number, trainStop: number, length: number) => {
+        let tc = trainStart;
+        const safeLen = Math.min(Math.max(length, 2), CELL_COUNT);
+        setTrainLen(safeLen);
+        setTrainCell(tc);
+        let trainSpeed = 45;
+        let trainElapsed = 0;
+        const TRAIN_TOTAL = 3000 + Math.floor(Math.random() * 3000);
+
+        const runTrain = () => {
+          tc = (tc + 1) % CELL_COUNT;
+          setTrainCell(tc);
+          trainElapsed += trainSpeed;
+          const progress = Math.min(trainElapsed / TRAIN_TOTAL, 1);
+          if (progress < 0.55) {
+            trainSpeed = 45;
+          } else {
+            const p = (progress - 0.55) / 0.45;
+            trainSpeed = Math.floor(45 + p * p * 260);
+          }
+          if (trainElapsed >= TRAIN_TOTAL) {
+            if (tc === trainStop) {
+              finishTrain();
+            } else {
+              const remain = (trainStop - tc + CELL_COUNT) % CELL_COUNT;
+              let stepCount = 0;
+              const finishTimer = setInterval(() => {
+                tc = (tc + 1) % CELL_COUNT;
+                setTrainCell(tc);
+                stepCount++;
+                if (tc === trainStop && stepCount >= remain) {
+                  clearInterval(finishTimer);
+                  spinTimerRef.current = null;
+                  finishTrain();
+                }
+              }, 220);
+              spinTimerRef.current = finishTimer as any;
+            }
+            return;
+          }
+          stopTimerRef.current = setTimeout(runTrain, trainSpeed);
+        };
+        stopTimerRef.current = setTimeout(runTrain, trainSpeed);
+      };
+
+      const afterLuckyFx = () => {
+        setLuckyFxPhase(false);
+        if (result.luckyTrainStart !== undefined && result.luckyTrainStop !== undefined) {
+          startTrainAnimation(result.luckyTrainStart, result.luckyTrainStop, result.trainLength || 8);
+        } else {
+          showResult();
+        }
+      };
+
       if (isLuckyFinal) {
-        // 命中 Lucky：播放 2 秒特效动画
         setLuckyFxPhase(true);
         if (luckyFxTimerRef.current) clearTimeout(luckyFxTimerRef.current);
         luckyFxTimerRef.current = setTimeout(afterLuckyFx, 2000);
@@ -374,6 +339,78 @@ export function LotteryPanel({ engineRef, isOpen, onClose }: LotteryPanelProps) 
 
       showResult();
     };
+
+    // 跑马灯减速结束后，根据是否已拿到结果决定行为
+    const finishSpin = () => {
+      if (spinTimerRef.current) {
+        clearInterval(spinTimerRef.current);
+        spinTimerRef.current = null;
+      }
+      setLitCell(-1);
+      const result = resultRef.value;
+      if (!result) {
+        // 结果还未到达：标记动画已结束，等待结果到达后由 .then 处理
+        spinEndedRef.value = true;
+        return;
+      }
+      setStopCell(result.stopCell);
+      runPostStopAnimation(result, result.stopCell);
+    };
+
+    const runStep = () => {
+      currentCell = (currentCell + 1) % CELL_COUNT;
+      setLitCell(currentCell);
+      totalElapsed += speed;
+      const progress = totalElapsed / TARGET_TOTAL;
+      speed = Math.floor(50 + progress * progress * 240);
+      if (totalElapsed >= TARGET_TOTAL) {
+        finishSpin();
+        return;
+      }
+      stopTimerRef.current = setTimeout(runStep, speed);
+    };
+    stopTimerRef.current = setTimeout(runStep, speed);
+
+    // 异步调用 spinLottery，结果到达后若动画已结束则直接停在 finalCell
+    void engineRef.current.spinLottery().then((result) => {
+      if (!result.success) {
+        showToast(result.msg || '无法旋转', neonRed);
+        // 中断动画
+        if (spinTimerRef.current) {
+          clearInterval(spinTimerRef.current);
+          spinTimerRef.current = null;
+        }
+        if (stopTimerRef.current) {
+          clearTimeout(stopTimerRef.current);
+          stopTimerRef.current = null;
+        }
+        setLitCell(-1);
+        setSpinning(false);
+        refreshStatus();
+        return;
+      }
+
+      refreshStatus();
+      resultRef.value = result;
+      if (spinEndedRef.value) {
+        // 减速动画已结束：直接停在 finalCell 并触发后续特效
+        setStopCell(result.stopCell);
+        runPostStopAnimation(result, result.stopCell);
+      }
+    }).catch((e) => {
+      showToast('旋转失败', neonRed);
+      if (spinTimerRef.current) {
+        clearInterval(spinTimerRef.current);
+        spinTimerRef.current = null;
+      }
+      if (stopTimerRef.current) {
+        clearTimeout(stopTimerRef.current);
+        stopTimerRef.current = null;
+      }
+      setLitCell(-1);
+      setSpinning(false);
+      refreshStatus();
+    });
   };
 
   // 判断格子是否在中奖列表中（不含 stopCell，stopCell 单独处理）

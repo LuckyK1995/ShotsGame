@@ -29,7 +29,7 @@ public class SaveDataController : AppControllerBase
     /// <param name="input">存档参数，包含序列化后的完整存档数据字符串</param>
     /// <returns>保存结果 SaveGameOutput（含存档版本号、保存时间）</returns>
     [HttpPost("save")]
-    public async Task<IActionResult> SaveGameAsync(SaveGameInput input)
+    public async Task<IActionResult> SaveGameAsync([FromBody] SaveGameInput input)
     {
         var playerId = GetCurrentUserId();
         if (string.IsNullOrEmpty(playerId))

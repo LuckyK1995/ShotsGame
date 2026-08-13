@@ -82,6 +82,17 @@ public class PlayerProfileOutput
     /// </summary>
     public int TotalVictories { get; set; }
 
+    /// <summary>PK胜场</summary>
+    public int PkWins { get; set; }
+    /// <summary>PK负场</summary>
+    public int PkLosses { get; set; }
+    /// <summary>PK总场次</summary>
+    public int PkTotal { get; set; }
+    /// <summary>战斗力</summary>
+    public long Power { get; set; }
+    /// <summary>当前关卡挑战最大关卡</summary>
+    public int MaxStage { get; set; }
+
     /// <summary>
     /// 上次活跃时间
     /// </summary>
@@ -143,4 +154,30 @@ public class LeaderboardEntryOutput
     /// 玩家最高波次记录
     /// </summary>
     public int MaxWave { get; set; }
+
+    /// <summary>战斗力</summary>
+    public long Power { get; set; }
+    /// <summary>PK胜场</summary>
+    public int PkWins { get; set; }
+    /// <summary>PK负场</summary>
+    public int PkLosses { get; set; }
+    /// <summary>PK总场次</summary>
+    public int PkTotal { get; set; }
+    /// <summary>PK胜率（0-100）</summary>
+    public double PkWinRate { get; set; }
+    /// <summary>是否在线</summary>
+    public bool IsOnline { get; set; }
+    /// <summary>当前关卡挑战最大关卡</summary>
+    public int MaxStage { get; set; }
+}
+
+/// <summary>
+/// 更新玩家统计入参（用于客户端上报战斗力、当前关卡）
+/// </summary>
+public class UpdatePlayerStatsInput
+{
+    /// <summary>战斗力</summary>
+    public long? Power { get; set; }
+    /// <summary>关卡挑战最大关卡</summary>
+    public int? MaxStage { get; set; }
 }

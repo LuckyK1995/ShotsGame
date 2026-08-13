@@ -69,13 +69,36 @@ public class JwtService
     }
 
     /// <summary>
-    /// 生成刷新令牌
+    /// 生成刷新令牌（带签名的 JWT 格式，包含玩家 ID 与过期时间，防止伪造）
     /// </summary>
     /// <param name="playerId">玩家 ID</param>
-    /// <returns>刷新令牌字符串（Base64 GUID + 玩家 ID）</returns>
+    /// <returns>刷新令牌字符串（带签名的 JWT）</returns>
     public string GenerateRefreshToken(string playerId)
     {
-        return Convert.ToBase64String(Guid.NewGuid().ToByteArray()) + "." + playerId;
+        var issuer = _config["Jwt:Issuer"] ?? "ShotsGame";
+        var audience = _config["Jwt:Audience"] ?? "ShotsGame.Client";
+        var secretKey = _config["Jwt:SecretKey"]!;
+        var refreshDays = double.Parse(_config["Jwt:RefreshExpiresDays"] ?? "7");
+
+        var key = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(secretKey));
+        var creds = new SigningCredentials(key, SecurityAlgorithms.HmacSha256);
+
+        var claims = new List<Claim>
+        {
+            new(ClaimTypes.NameIdentifier, playerId),
+            new("token_type", "refresh")
+        };
+
+        var token = new JwtSecurityTokenHandler().CreateToken(new SecurityTokenDescriptor
+        {
+            Issuer = issuer,
+            Audience = audience,
+            Subject = new ClaimsIdentity(claims),
+            Expires = DateTime.UtcNow.AddDays(refreshDays),
+            SigningCredentials = creds
+        });
+
+        return new JwtSecurityTokenHandler().WriteToken(token);
     }
 
     /// <summary>
@@ -134,16 +157,25 @@ public class JwtService
     }
 
     /// <summary>
-    /// 从刷新令牌中提取玩家 ID
+    /// 从刷新令牌中提取玩家 ID（校验签名与过期时间，失败返回 null）
     /// </summary>
-    /// <param name="refreshToken">刷新令牌字符串</param>
-    /// <returns>玩家 ID，格式错误返回 null</returns>
+    /// <param name="refreshToken">刷新令牌字符串（带签名的 JWT）</param>
+    /// <returns>玩家 ID，校验失败返回 null</returns>
     public string? GetUserIdFromRefreshToken(string refreshToken)
     {
-        var parts = refreshToken.Split('.');
-        if (parts.Length != 2)
+        var principal = ValidateToken(refreshToken);
+        if (principal == null)
+        {
             return null;
+        }
 
-        return parts[1];
+        // 必须包含 token_type=refresh 声明，防止 access token 被误用为 refresh token
+        var tokenType = principal.FindFirst("token_type")?.Value;
+        if (tokenType != "refresh")
+        {
+            return null;
+        }
+
+        return principal.FindFirst(ClaimTypes.NameIdentifier)?.Value;
     }
 }

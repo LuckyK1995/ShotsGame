@@ -1,5 +1,6 @@
 import { useState, useEffect, memo } from 'react';
 import { useGameStore } from '../store/gameStore';
+import { useAuthStore } from '../store/authStore';
 import {
   neonCyan, neonPurple, neonPink, neonYellow, neonGreen,
   neonBlue, neonRed, neonOrange, neonText
@@ -204,6 +205,7 @@ function WarriorHeroMini() {
 function CharacterPanelImpl({ engineRef }: CharacterPanelProps) {
   // 性能优化：使用细粒度 selector
   const player = useGameStore(s => s.player);
+  const profile = useAuthStore(s => s.profile);
   const [power, setPower] = useState(0);
 
   useEffect(() => {
@@ -317,6 +319,51 @@ function CharacterPanelImpl({ engineRef }: CharacterPanelProps) {
               }} />
             ))}
           </div>
+
+          {/* 玩家身份信息：昵称 + ID */}
+          {profile && (
+            <div
+              className="flex flex-col items-center"
+              style={{
+                width: '90px',
+                marginTop: '4px',
+                padding: '2px 4px',
+                background: 'linear-gradient(135deg, rgba(176, 38, 255, 0.12), rgba(0, 245, 212, 0.08))',
+                border: `0.5px solid ${neonPurple}40`,
+                borderRadius: '4px',
+                clipPath: 'polygon(4px 0, 100% 0, calc(100% - 4px) 100%, 0 100%)',
+                gap: '1px',
+              }}
+            >
+              <span
+                style={{
+                  ...neonText,
+                  fontSize: '9px',
+                  fontWeight: 700,
+                  color: neonCyan,
+                  textShadow: `0 0 4px ${neonCyan}80`,
+                  letterSpacing: '0.5px',
+                  maxWidth: '100%',
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap',
+                }}
+                title={profile.displayName}
+              >
+                {profile.displayName}
+              </span>
+              <span
+                style={{
+                  ...neonText,
+                  fontSize: '6px',
+                  color: '#8B80A0',
+                  letterSpacing: '0.5px',
+                }}
+              >
+                ID {profile.id.slice(0, 8)}
+              </span>
+            </div>
+          )}
 
           {/* 等级：全息 HUD 标签 */}
           <div

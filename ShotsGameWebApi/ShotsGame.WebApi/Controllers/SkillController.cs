@@ -48,7 +48,7 @@ public class SkillController : AppControllerBase
     /// <param name="input">技能升级参数，包含目标技能 ID</param>
     /// <returns>升级后技能详情 SkillOutput</returns>
     [HttpPost("upgrade")]
-    public async Task<IActionResult> UpgradeSkillAsync(UpgradeSkillInput input)
+    public async Task<IActionResult> UpgradeSkillAsync([FromBody] UpgradeSkillInput input)
     {
         var playerId = GetCurrentUserId();
         if (string.IsNullOrEmpty(playerId))
@@ -76,7 +76,7 @@ public class SkillController : AppControllerBase
     /// <param name="input">技能降级参数，包含目标技能 ID</param>
     /// <returns>降级后技能详情 SkillOutput（含返还的技能点）</returns>
     [HttpPost("downgrade")]
-    public async Task<IActionResult> DowngradeSkillAsync(DowngradeSkillInput input)
+    public async Task<IActionResult> DowngradeSkillAsync([FromBody] DowngradeSkillInput input)
     {
         var playerId = GetCurrentUserId();
         if (string.IsNullOrEmpty(playerId))
